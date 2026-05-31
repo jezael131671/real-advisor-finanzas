@@ -30,6 +30,7 @@ import InversionModal     from './components/modals/InversionModal.jsx'
 import AssetModal         from './components/modals/AssetModal.jsx'
 import SubscriptionModal  from './components/modals/SubscriptionModal.jsx'
 import MetaModal          from './components/modals/MetaModal.jsx'
+import CaptureModal       from './components/modals/CaptureModal.jsx'
 
 const SCREENS = {
   dashboard:    Dashboard,
@@ -108,6 +109,7 @@ export default function App() {
       {modal?.type === 'asset'         && <AssetModal         onClose={closeModal} data={modal.data} />}
       {modal?.type === 'subscription'  && <SubscriptionModal  onClose={closeModal} data={modal.data} />}
       {modal?.type === 'meta'          && <MetaModal          onClose={closeModal} data={modal.data} />}
+      {modal?.type === 'capture'       && <CaptureModal       onClose={closeModal} />}
     </div>
   )
 }

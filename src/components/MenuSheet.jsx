@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { CreditCard, ArrowUpDown, Guitar, TrendingUp, Scale, BarChart3, Calendar, Bell, Settings, X, Target, Droplets, BrainCircuit, CalendarCheck, LineChart, BookOpen, FileBarChart2 } from 'lucide-react'
+import { CreditCard, ArrowUpDown, Guitar, TrendingUp, Scale, BarChart3, Calendar, Bell, Settings, X, Target, Droplets, BrainCircuit, CalendarCheck, LineChart, BookOpen, FileBarChart2, Camera } from 'lucide-react'
 import useFinanceStore   from '../store/useFinanceStore.js'
 import { computeAlerts } from '../store/selectors.js'
 
@@ -21,6 +21,33 @@ const MENU_ITEMS = [
   { key: 'alertas',      label: 'Alertas',        icon: Bell,        color: '#EA580C' },
   { key: 'config',       label: 'Configuración',  icon: Settings,    color: '#64748B' },
 ]
+
+// ── "Actualizar con captura" hero action ──────────────────────────────────
+function CaptureHero({ onCapture }) {
+  return (
+    <button
+      onClick={onCapture}
+      className="btn-press w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl mb-3"
+      style={{
+        background: 'linear-gradient(135deg, rgba(79,70,229,0.18), rgba(99,102,241,0.12))',
+        border: '1px solid rgba(79,70,229,0.30)',
+      }}
+    >
+      <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+        style={{ background: 'linear-gradient(135deg,#4F46E5,#818CF8)' }}>
+        <Camera size={20} color="#fff" />
+      </div>
+      <div className="text-left">
+        <p className="text-sm font-black" style={{ color: 'var(--t1)' }}>Actualizar con captura</p>
+        <p className="text-[11px]" style={{ color: '#818CF8' }}>BBVA · Nu · IBKR · Stori · DiDi · Revolut</p>
+      </div>
+      <div className="ml-auto text-[10px] font-bold px-2 py-1 rounded-lg"
+        style={{ background: 'rgba(79,70,229,0.25)', color: '#818CF8' }}>
+        NUEVO
+      </div>
+    </button>
+  )
+}
 
 export default function MenuSheet({ onClose, setTab, openModal }) {
   const state      = useFinanceStore()
@@ -53,6 +80,11 @@ export default function MenuSheet({ onClose, setTab, openModal }) {
             style={{ background: 'var(--s2)', border: '1px solid var(--border)' }}>
             <X size={16} color="var(--t2)" />
           </button>
+        </div>
+
+        {/* ── Capture hero ── */}
+        <div className="px-5 pt-1 pb-0">
+          <CaptureHero onCapture={() => { onClose(); openModal('capture') }} />
         </div>
 
         <div className="px-5 pb-4 pt-2 grid grid-cols-3 gap-3">
