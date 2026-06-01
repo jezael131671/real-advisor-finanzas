@@ -70,11 +70,15 @@ export default function MenuSheet({ onClose, setTab, openModal }) {
           borderTop: '1px solid var(--border)',
           paddingBottom: 'env(safe-area-inset-bottom, 20px)',
           boxShadow: '0 -8px 40px rgba(0,10,50,0.12)',
+          maxHeight: '92dvh',
+          display: 'flex',
+          flexDirection: 'column',
         }}
       >
-        <div className="drag-handle" />
+        <div className="drag-handle shrink-0" />
 
-        <div className="px-5 pb-2 pt-3 flex justify-between items-center">
+        {/* ── Fixed header ── */}
+        <div className="px-5 pb-2 pt-3 flex justify-between items-center shrink-0">
           <h2 className="text-lg font-black" style={{ color: 'var(--t1)' }}>Todas las secciones</h2>
           <button onClick={onClose} className="btn-press w-8 h-8 rounded-full flex items-center justify-center"
             style={{ background: 'var(--s2)', border: '1px solid var(--border)' }}>
@@ -82,10 +86,12 @@ export default function MenuSheet({ onClose, setTab, openModal }) {
           </button>
         </div>
 
-        {/* ── Capture hero ── */}
-        <div className="px-5 pt-1 pb-0">
-          <CaptureHero onCapture={() => { onClose(); openModal('capture') }} />
-        </div>
+        {/* ── Scrollable body ── */}
+        <div className="overflow-y-auto flex-1">
+          {/* ── Capture hero ── */}
+          <div className="px-5 pt-1 pb-0">
+            <CaptureHero onCapture={() => { onClose(); openModal('capture') }} />
+          </div>
 
         <div className="px-5 pb-4 pt-2 grid grid-cols-3 gap-3">
           {MENU_ITEMS.map(item => {
@@ -139,6 +145,7 @@ export default function MenuSheet({ onClose, setTab, openModal }) {
             ))}
           </div>
         </div>
+        </div>{/* end scrollable body */}
       </div>
     </div>
   )
