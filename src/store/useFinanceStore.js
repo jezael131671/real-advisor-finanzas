@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { uid, today } from '../lib/formatters.js'
 import { DEFAULT_CATEGORIES, DEFAULT_METAS } from './defaultData.js'
+import { SEED_ACCOUNTS, SEED_CARDS, SEED_SETTINGS } from './seedData.js'
 
 const num = (n) => Number(n) || 0
 
@@ -323,6 +324,18 @@ const useFinanceStore = create(
 
       // ── SETTINGS ─────────────────────────────────────────────────────────────
       updateSettings: (upd) => set(s => ({ settings: { ...s.settings, ...upd } })),
+
+      // ── SEED INITIALIZATION ───────────────────────────────────────────────────
+      // Seeds accounts, cards and IBKR settings only when the store is brand new.
+      // The `seeded` flag prevents re-seeding if the user wipes their data manually.
+      initializeWithSeedData: () => set(s => {
+        if (s.accounts.length > 0 || s.cards.length > 0 || s.settings?.seeded === true) return s
+        return {
+          accounts: SEED_ACCOUNTS,
+          cards:    SEED_CARDS,
+          settings: { ...s.settings, ...SEED_SETTINGS },
+        }
+      }),
 
       // ── BACKUP / RESTORE ─────────────────────────────────────────────────────
       restoreState: (data) => set(() => ({

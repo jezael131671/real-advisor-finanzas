@@ -63,6 +63,7 @@ export const computeStats = (state) => {
     transactions = [],
     bajoquintos  = [],
     subscriptions = [],
+    settings     = {},
   } = state
 
   const now      = new Date()
@@ -83,6 +84,17 @@ export const computeStats = (state) => {
     investmentValue += qty * curr * mult
     investmentCost  += qty * buy  * mult
   })
+
+  // When no individual IBKR positions are tracked, use the NLV from the last
+  // capture as the portfolio value. investmentCost = NLV so P&L stays 0 here
+  // (actual P&L is shown separately via settings.ibkr.lastUnrealizedPnl).
+  const hasIbkrPositions = investments.some(i => i.ibkrSynced)
+  const ibkrNLV = !hasIbkrPositions ? num(settings?.ibkr?.lastNLV) : 0
+  if (ibkrNLV > 0) {
+    investmentValue += ibkrNLV
+    investmentCost  += ibkrNLV
+  }
+
   const investmentPnL = investmentValue - investmentCost
 
   const manualAssets      = assets.filter(a => a.isActive !== false).reduce((s, a) => s + num(a.value), 0)
@@ -558,6 +570,7 @@ export const computeMetaInsights = (state) => {
   const {
     metas = [], accounts = [], cards = [], investments = [], bajoquintos = [],
     subscriptions = [], cashflowItems = [], assets = [], liabilities = [], transactions = [],
+    settings = {},
   } = state
 
   const now = new Date()
@@ -568,6 +581,10 @@ export const computeMetaInsights = (state) => {
   investments.forEach(inv => {
     investmentValue += num(inv.quantity) * num(inv.currentPrice || inv.buyPrice) * (isOptType(inv.type) ? 100 : 1)
   })
+  // Fallback: IBKR NLV from last capture when no synced positions
+  if (!investments.some(i => i.ibkrSynced)) {
+    investmentValue += num(settings?.ibkr?.lastNLV)
+  }
   const totalAssets = totalCash + investmentValue
     + assets.filter(a => a.isActive !== false).reduce((s, a) => s + num(a.value), 0)
   const totalLiabilities = totalCardDebt
@@ -655,6 +672,7 @@ export const computeAdvisorScore = (state) => {
   const {
     accounts = [], cards = [], investments = [], bajoquintos = [],
     metas = [], subscriptions = [], cashflowItems = [], transactions = [],
+    settings = {},
   } = state
 
   const now = new Date()
@@ -668,6 +686,10 @@ export const computeAdvisorScore = (state) => {
   investments.forEach(inv => {
     investmentValue += num(inv.quantity) * num(inv.currentPrice || inv.buyPrice) * (isOptType(inv.type) ? 100 : 1)
   })
+  // Fallback: IBKR NLV from last capture when no synced positions
+  if (!investments.some(i => i.ibkrSynced)) {
+    investmentValue += num(settings?.ibkr?.lastNLV)
+  }
 
   const monthStart = startOfMonth(now)
   const monthEnd   = endOfMonth(now)

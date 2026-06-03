@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Toaster } from 'react-hot-toast'
+import useFinanceStore from './store/useFinanceStore.js'
 import Navigation        from './components/Navigation.jsx'
 import MenuSheet         from './components/MenuSheet.jsx'
 import Dashboard         from './components/Dashboard.jsx'
@@ -57,6 +58,10 @@ export default function App() {
   const [tab,       setTab]       = useState('dashboard')
   const [modal,     setModal]     = useState(null) // { type, data? }
   const [menuOpen,  setMenuOpen]  = useState(false)
+
+  // Seed accounts, cards, and IBKR settings once on first launch
+  const initializeWithSeedData = useFinanceStore(s => s.initializeWithSeedData)
+  useEffect(() => { initializeWithSeedData() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const openModal  = (type, data) => setModal({ type, data })
   const closeModal = ()           => setModal(null)
