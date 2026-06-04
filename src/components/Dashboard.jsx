@@ -765,44 +765,143 @@ export default function Dashboard({ openModal, setTab }) {
             </button>
 
             {/* Breakdown content */}
-            {showBD && (
-              <div className="mt-2 rounded-2xl px-3 py-3 fade-in"
-                style={{ background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.07)' }}>
-                <p className="text-[9px] font-bold uppercase tracking-wider mb-2"
-                  style={{ color: 'rgba(167,139,250,0.45)' }}>Activos</p>
-                {bd.cash.total > 0 && (
-                  <BDRow emoji="💵" label="Efectivo" value={fmxC(bd.cash.total)} color="#4ADE80" />
-                )}
-                {bd.investments.total > 0 && (
-                  <BDRow emoji="📈" label={bd.investments.ibkrNLV ? 'IBKR NLV + otras inv.' : 'Inversiones'}
-                    value={fmxC(bd.investments.total)} color="#818CF8" />
-                )}
-                {bd.receivables.total > 0 && (
-                  <BDRow emoji="🎸" label="Por cobrar" value={fmxC(bd.receivables.total)} color="#F59E0B" />
-                )}
-                {bd.manualAssets.total > 0 && (
-                  <BDRow emoji="🏠" label="Otros activos" value={fmxC(bd.manualAssets.total)} color="#60A5FA" />
-                )}
-                <BDRow label="Total activos" value={fmxC(bd.totalAssets)} color="#4ADE80" bold separator />
+            {showBD && (() => {
+              const ST = { fontSize:9, color:'rgba(167,139,250,0.38)', paddingLeft:18, marginTop:1 }
+              const SRow = ({ label, value, dim }) => (
+                <div className="flex justify-between items-center py-0.5 pl-5">
+                  <span style={{ fontSize:10, color:'rgba(167,139,250,0.48)' }}>{label}</span>
+                  <span style={{ fontSize:10, fontWeight:700, color: dim ? 'rgba(167,139,250,0.28)' : 'rgba(167,139,250,0.72)' }}>
+                    {value}
+                  </span>
+                </div>
+              )
+              const Sep = () => <div style={{ height:1, background:'rgba(255,255,255,0.07)', margin:'5px 0' }} />
+              return (
+                <div className="mt-2 rounded-2xl px-3 py-3 fade-in space-y-0.5"
+                  style={{ background:'rgba(0,0,0,0.28)', border:'1px solid rgba(255,255,255,0.07)' }}>
 
-                <p className="text-[9px] font-bold uppercase tracking-wider mt-2 mb-1"
-                  style={{ color: 'rgba(167,139,250,0.45)' }}>Pasivos</p>
-                {bd.cardDebt.total > 0 && (
-                  <BDRow emoji="💳" label="Tarjetas" value={`−${fmxC(bd.cardDebt.total)}`} color="#F87171" />
-                )}
-                {bd.manualLiabilities.total > 0 && (
-                  <BDRow emoji="📦" label="Otros pasivos" value={`−${fmxC(bd.manualLiabilities.total)}`} color="#F87171" />
-                )}
-                <BDRow label="Total pasivos" value={`−${fmxC(bd.totalLiabilities)}`} color="#F87171" bold separator />
+                  {/* ── ACTIVOS ─────────────────────────────────────── */}
+                  <p style={{ fontSize:9, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em',
+                    color:'rgba(167,139,250,0.45)', marginBottom:5 }}>
+                    Activos · {fmxC(bd.totalAssets)}
+                  </p>
 
-                <BDRow
-                  label="Patrimonio neto"
-                  value={fmxC(bd.netWorth)}
-                  color={bd.netWorth >= 0 ? '#4ADE80' : '#F87171'}
-                  bold separator
-                />
-              </div>
-            )}
+                  {/* Efectivo */}
+                  <BDRow emoji="💵" label="Efectivo" value={fmxC(bd.cash.total)}
+                    color={bd.cash.total > 0 ? '#4ADE80' : 'rgba(167,139,250,0.35)'} />
+                  {bd.cash.items.map(a => (
+                    <SRow key={a.id} label={a.name} value={a.amount > 0 ? fmxC(a.amount) : '$0'} dim={a.amount === 0} />
+                  ))}
+                  {bd.cash.total === 0 && (
+                    <p style={ST}>↓ Sube captura de BBVA · Revolut · Stori · Nu para actualizar saldo</p>
+                  )}
+
+                  {/* Inversiones */}
+                  <BDRow emoji="📈" label="Inversiones" value={fmxC(bd.investments.total)}
+                    color={bd.investments.total > 0 ? '#818CF8' : 'rgba(167,139,250,0.35)'} />
+                  {bd.investments.ibkrNLV != null && bd.investments.ibkrNLV > 0 && (
+                    <div className="pl-5">
+                      <div className="flex justify-between items-center py-0.5">
+                        <span style={{ fontSize:10, color:'rgba(167,139,250,0.48)' }}>IBKR NLV</span>
+                        <span style={{ fontSize:10, fontWeight:700, color:'rgba(167,139,250,0.72)' }}>
+                          {fmxC(bd.investments.ibkrNLV)}
+                        </span>
+                      </div>
+                      {bd.investments.ibkrSyncedAt && (
+                        <p style={{ fontSize:9, color:'rgba(167,139,250,0.32)', marginTop:1 }}>
+                          {bd.investments.ibkrSource === 'capture' ? '📷 Captura OCR' :
+                           bd.investments.ibkrSource === 'test'    ? '🧪 Datos de prueba' : '🔌 API IBKR'}
+                          {' · '}{new Date(bd.investments.ibkrSyncedAt).toLocaleString('es-MX',
+                            { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  {bd.investments.positions.map(p => (
+                    <SRow key={p.id} label={p.ticker} value={fmxC(p.amount)} />
+                  ))}
+                  {bd.investments.total === 0 && (
+                    <p style={ST}>↓ Sube captura de IBKR para ver NLV · o agrega posiciones manualmente</p>
+                  )}
+
+                  {/* Por cobrar */}
+                  {bd.receivables.total > 0 && (
+                    <>
+                      <BDRow emoji="🎸" label="Por cobrar" value={fmxC(bd.receivables.total)} color="#F59E0B" />
+                      {bd.receivables.items.map(r => (
+                        <SRow key={r.id} label={r.name + (r.model ? ' · ' + r.model : '')} value={fmxC(r.amount)} />
+                      ))}
+                    </>
+                  )}
+
+                  {/* Otros activos */}
+                  {bd.manualAssets.total > 0 && (
+                    <>
+                      <BDRow emoji="🏠" label="Otros activos" value={fmxC(bd.manualAssets.total)} color="#60A5FA" />
+                      {bd.manualAssets.items.map(a => (
+                        <SRow key={a.id} label={a.name} value={fmxC(a.amount)} />
+                      ))}
+                    </>
+                  )}
+
+                  <Sep />
+                  <div className="flex justify-between items-center">
+                    <span style={{ fontSize:11, fontWeight:700, color:'rgba(255,255,255,0.75)' }}>Total activos</span>
+                    <span style={{ fontSize:11, fontWeight:700, color:'#4ADE80' }}>{fmxC(bd.totalAssets)}</span>
+                  </div>
+
+                  {/* ── PASIVOS ─────────────────────────────────────── */}
+                  <p style={{ fontSize:9, fontWeight:700, textTransform:'uppercase', letterSpacing:'0.07em',
+                    color:'rgba(167,139,250,0.45)', marginTop:10, marginBottom:5 }}>
+                    Pasivos · {fmxC(bd.totalLiabilities)}
+                  </p>
+
+                  <BDRow emoji="💳" label="Tarjetas" value={bd.cardDebt.total > 0 ? `−${fmxC(bd.cardDebt.total)}` : '$0'}
+                    color={bd.cardDebt.total > 0 ? '#F87171' : 'rgba(167,139,250,0.35)'} />
+                  {bd.cardDebt.items.map(c => (
+                    <SRow key={c.id} label={c.name} value={c.amount > 0 ? fmxC(c.amount) : '$0'} dim={c.amount === 0} />
+                  ))}
+                  {bd.cardDebt.total === 0 && (
+                    <p style={ST}>↓ Sube captura de Nu · BBVA · Stori · DiDi para actualizar saldo</p>
+                  )}
+
+                  {bd.manualLiabilities.total > 0 && (
+                    <>
+                      <BDRow emoji="📦" label="Otros pasivos" value={`−${fmxC(bd.manualLiabilities.total)}`} color="#F87171" />
+                      {bd.manualLiabilities.items.map(l => (
+                        <SRow key={l.id} label={l.name} value={fmxC(l.amount)} />
+                      ))}
+                    </>
+                  )}
+
+                  <Sep />
+                  <div className="flex justify-between items-center">
+                    <span style={{ fontSize:11, fontWeight:700, color:'rgba(255,255,255,0.75)' }}>Total pasivos</span>
+                    <span style={{ fontSize:11, fontWeight:700, color: bd.totalLiabilities > 0 ? '#F87171' : 'rgba(167,139,250,0.35)' }}>
+                      {bd.totalLiabilities > 0 ? `−${fmxC(bd.totalLiabilities)}` : '$0'}
+                    </span>
+                  </div>
+
+                  {/* ── FÓRMULA ─────────────────────────────────────── */}
+                  <div className="mt-2 pt-2" style={{ borderTop:'1px solid rgba(255,255,255,0.10)' }}>
+                    <p style={{ fontSize:9, color:'rgba(167,139,250,0.38)', marginBottom:3 }}>
+                      Fórmula: activos − pasivos = patrimonio neto
+                    </p>
+                    <div className="flex items-center justify-between">
+                      <span style={{ fontSize:10, color:'rgba(167,139,250,0.55)' }}>
+                        {fmxC(bd.totalAssets)} − {fmxC(bd.totalLiabilities)} =
+                      </span>
+                      <span style={{ fontSize:16, fontWeight:900, color: bd.netWorth >= 0 ? '#4ADE80' : '#F87171' }}>
+                        {fmxC(bd.netWorth)}
+                      </span>
+                    </div>
+                    <p style={{ fontSize:8, color:'rgba(167,139,250,0.25)', marginTop:4, textAlign:'right' }}>
+                      Calculado: {new Date(bd.computedAt).toLocaleTimeString('es-MX', { hour:'2-digit', minute:'2-digit', second:'2-digit' })}
+                    </p>
+                  </div>
+                </div>
+              )
+            })()}
 
             {/* Ver evolución button */}
             <button onClick={() => setTab('evolucion')}

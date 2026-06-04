@@ -1,11 +1,13 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useMemo } from 'react'
 import {
   Plus, Pencil, Trash2,
   Download, Upload, RefreshCw, HardDrive, AlertTriangle,
-  Server, Wifi, Loader2,
+  Server, Wifi, Loader2, FlaskConical, ChevronDown, CheckCircle2, XCircle,
 } from 'lucide-react'
 import useFinanceStore from '../store/useFinanceStore.js'
 import { DEFAULT_CATEGORIES, DEFAULT_METAS } from '../store/defaultData.js'
+import { TEST_CASES, CASE_A, CASE_B, CASE_C } from '../store/testData.js'
+import { validateBreakdown } from '../store/selectors.js'
 import { useIBKR } from '../hooks/useIBKR.js'
 import toast from 'react-hot-toast'
 
@@ -196,6 +198,36 @@ export default function Configuracion() {
     setPendingImport(null)
   }
 
+  // ── Test data & validation ────────────────────────────────────────────────
+  const [validationResult, setValidationResult] = useState(null)
+  const [showValidation,   setShowValidation]   = useState(false)
+  const [activeTestCase,   setActiveTestCase]   = useState(null)
+
+  const handleLoadTestCase = (caseId) => {
+    const caseData = TEST_CASES[caseId]
+    if (!caseData) return
+    const { _expected, ...state } = caseData
+    restoreState(state)
+    setActiveTestCase(caseId)
+    toast.success(`Datos de prueba ${caseId.toUpperCase()} cargados`)
+  }
+
+  const handleRunValidation = () => {
+    const state = useFinanceStore.getState()
+    // Detect which test case is active and use its expected values
+    const active = activeTestCase
+    const expected = active ? (TEST_CASES[active]?._expected ?? null) : null
+    const result = validateBreakdown(state, expected)
+    setValidationResult(result)
+    setShowValidation(true)
+    if (result.pass) {
+      toast.success(`✓ Validación: ${result.score}/${result.total} checks OK`)
+    } else {
+      const failed = result.checks.filter(c => !c.pass).length
+      toast.error(`${failed} check${failed !== 1 ? 's' : ''} fallido${failed !== 1 ? 's' : ''}`)
+    }
+  }
+
   // ── Backup: Restore demo ──────────────────────────────────────────────────
   const handleConfirmDemo = () => {
     restoreState({
@@ -310,6 +342,110 @@ export default function Configuracion() {
               onCancel={cancelConfirm}
               onConfirm={confirmMode === 'import' ? handleConfirmImport : handleConfirmDemo}
             />
+          )}
+        </div>
+
+        {/* ── Datos de prueba & Validación ─────────────────────────────────── */}
+        <div className="card mb-4">
+          <div className="flex items-center gap-2 mb-1">
+            <FlaskConical size={16} color="var(--t2)" />
+            <p className="font-bold" style={{ color: 'var(--t1)' }}>Datos de prueba</p>
+            {activeTestCase && (
+              <span className="ml-auto text-[10px] font-bold px-2 py-0.5 rounded-lg"
+                style={{ background:'rgba(99,102,241,0.15)', color:'#818CF8' }}>
+                {activeTestCase.toUpperCase()} activo
+              </span>
+            )}
+          </div>
+          <p className="text-[11px] mb-4" style={{ color:'var(--t3)' }}>
+            Carga datos controlados para validar que los cálculos sean correctos. Borra tu estado actual.
+          </p>
+
+          {/* Case buttons */}
+          <div className="space-y-2">
+            {[
+              { id: 'caseA', label: 'Caso A', desc: 'BBVA $3K + Revolut $5K + IBKR $2K − Nu $1K → Patrim. $9K', color: '#059669' },
+              { id: 'caseB', label: 'Caso B', desc: 'Solo IBKR NLV $10K, sin cuentas ni pasivos → Patrim. $10K',  color: '#6366F1' },
+              { id: 'caseC', label: 'Caso C', desc: 'Transferencia BBVA→Revolut: patrimonio sin cambio, flujo $0',  color: '#D97706' },
+            ].map(({ id, label, desc, color }) => (
+              <button key={id}
+                onClick={() => handleLoadTestCase(id)}
+                className="btn-press w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-left"
+                style={{
+                  background: activeTestCase === id ? `${color}12` : 'var(--s2)',
+                  border: `1px solid ${activeTestCase === id ? color + '35' : 'var(--border)'}`,
+                }}>
+                <div className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 text-sm font-black"
+                  style={{ background: `${color}18`, color }}>
+                  {label.split(' ')[1]}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-bold truncate" style={{ color:'var(--t1)' }}>{label}</p>
+                  <p className="text-[10px] leading-tight mt-0.5" style={{ color:'var(--t3)' }}>{desc}</p>
+                </div>
+                {activeTestCase === id && <CheckCircle2 size={14} color={color} />}
+              </button>
+            ))}
+          </div>
+
+          {/* Run validation */}
+          <button
+            onClick={handleRunValidation}
+            className="btn-press w-full flex items-center justify-center gap-2 mt-3 py-3 rounded-2xl text-sm font-bold"
+            style={{ background:'rgba(79,70,229,0.12)', border:'1px solid rgba(79,70,229,0.25)', color:'var(--accent)' }}>
+            <FlaskConical size={15} />
+            {activeTestCase
+              ? `Validar ${activeTestCase.toUpperCase()} contra estado actual`
+              : 'Validar estado actual (solo consistencia interna)'}
+          </button>
+
+          {/* Validation results */}
+          {showValidation && validationResult && (
+            <div className="mt-3 rounded-2xl overflow-hidden fade-in"
+              style={{ border:`1px solid ${validationResult.pass ? 'rgba(5,150,105,0.25)' : 'rgba(225,29,72,0.25)'}` }}>
+
+              {/* Header */}
+              <div className="flex items-center gap-2 px-4 py-3"
+                style={{ background: validationResult.pass ? 'rgba(5,150,105,0.08)' : 'rgba(225,29,72,0.06)' }}>
+                {validationResult.pass
+                  ? <CheckCircle2 size={16} color="#059669" />
+                  : <XCircle size={16} color="#E11D48" />}
+                <p className="text-sm font-bold"
+                  style={{ color: validationResult.pass ? '#059669' : '#E11D48' }}>
+                  {validationResult.pass
+                    ? `✓ Todos los checks OK (${validationResult.score}/${validationResult.total})`
+                    : `✗ ${validationResult.total - validationResult.score} check${validationResult.total - validationResult.score !== 1 ? 's' : ''} fallido${validationResult.total - validationResult.score !== 1 ? 's' : ''} de ${validationResult.total}`}
+                </p>
+                <button onClick={() => setShowValidation(false)} className="ml-auto"
+                  style={{ color:'var(--t3)', fontSize:16, lineHeight:1 }}>×</button>
+              </div>
+
+              {/* Check list */}
+              <div className="px-4 py-3 space-y-2.5">
+                {validationResult.checks.map((c, i) => (
+                  <div key={i}>
+                    <div className="flex items-start gap-2">
+                      {c.pass
+                        ? <CheckCircle2 size={12} color="#059669" className="mt-0.5 shrink-0" />
+                        : <XCircle size={12} color="#E11D48" className="mt-0.5 shrink-0" />}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[11px] font-semibold leading-tight"
+                          style={{ color: c.pass ? 'var(--t1)' : '#E11D48' }}>
+                          {c.name}
+                        </p>
+                        {!c.pass && (
+                          <p className="text-[10px] mt-0.5" style={{ color:'#E11D48' }}>
+                            Real: {typeof c.actual === 'number' ? `$${c.actual.toLocaleString('es-MX', {minimumFractionDigits:2,maximumFractionDigits:2})}` : c.actual}
+                            {' '}| Esperado: {typeof c.expected === 'number' ? `$${c.expected.toLocaleString('es-MX', {minimumFractionDigits:2,maximumFractionDigits:2})}` : c.expected}
+                          </p>
+                        )}
+                        <p className="text-[9px] mt-0.5" style={{ color:'var(--t3)' }}>{c.note}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </div>
 

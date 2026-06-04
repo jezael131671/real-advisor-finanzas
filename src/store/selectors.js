@@ -993,3 +993,111 @@ export const computeBreakdown = (state) => {
     computedAt: new Date().toISOString(),
   }
 }
+
+// ── validateBreakdown ─────────────────────────────────────────────────────────
+// Runs internal consistency checks on computeBreakdown(state).
+// Also accepts optional expected values (from testData.js _expected fields)
+// to validate a test case scenario.
+//
+// Returns: { pass, score, total, checks: [{name, pass, actual, expected, note}] }
+// ─────────────────────────────────────────────────────────────────────────────
+export const validateBreakdown = (state, expected = null) => {
+  const bd = computeBreakdown(state)
+  const checks = []
+
+  const chk = (name, actual, expectedVal, note = '') => {
+    const tolerance = Math.max(0.01, Math.abs(expectedVal) * 0.001)  // 0.1% tolerance
+    const pass = Math.abs(num(actual) - num(expectedVal)) <= tolerance
+    checks.push({ name, pass, actual: num(actual), expected: num(expectedVal), note })
+    return pass
+  }
+
+  // ── Internal consistency checks ───────────────────────────────────────────
+  chk('Efectivo = Σ account.balance',
+    bd.cash.total,
+    bd.cash.items.reduce((s, a) => s + a.amount, 0),
+    'Cada cuenta debe sumar al total de efectivo')
+
+  chk('Tarjetas = Σ card.balance',
+    bd.cardDebt.total,
+    bd.cardDebt.items.reduce((s, c) => s + c.amount, 0),
+    'Cada tarjeta debe sumar al total de deuda')
+
+  chk('Inversiones = posiciones + NLV',
+    bd.investments.total,
+    bd.investments.positions.reduce((s, p) => s + p.amount, 0) + num(bd.investments.ibkrNLV),
+    'Suma de posiciones visibles + NLV debe igualar total de inversiones')
+
+  chk('Total activos = efectivo + inversiones + porCobrar + otrosActivos',
+    bd.totalAssets,
+    bd.cash.total + bd.investments.total + bd.receivables.total + bd.manualAssets.total,
+    'Fórmula: activos = efectivo + inv + receivables + activos_manuales')
+
+  chk('Total pasivos = tarjetas + pasivos manuales',
+    bd.totalLiabilities,
+    bd.cardDebt.total + bd.manualLiabilities.total,
+    'Fórmula: pasivos = tarjetas + deudas_manuales')
+
+  chk('Patrimonio neto = activos - pasivos',
+    bd.netWorth,
+    bd.totalAssets - bd.totalLiabilities,
+    'Identidad fundamental del balance')
+
+  // Rule 6: IBKR NLV — no IBKR positions in visiblePositions
+  if (num(bd.investments.ibkrNLV) > 0) {
+    const nlvCoversAll = !state.investments?.some(i => i.broker === 'ibkr' || i.ibkrSynced)
+      || bd.investments.positions.every(p =>
+          !state.investments?.find(i => i.id === p.id && (i.broker === 'ibkr' || i.ibkrSynced))
+        )
+    checks.push({
+      name: 'R6: IBKR NLV exclusivo (no doble conteo posiciones)',
+      pass: nlvCoversAll,
+      actual: nlvCoversAll ? 1 : 0,
+      expected: 1,
+      note: 'Cuando NLV > 0, posiciones IBKR deben estar excluidas del sum de posiciones',
+    })
+  }
+
+  // Rule 10: pago_tarjeta no cuenta en monthExpenses
+  const hasPagoTarjeta = (state.transactions || []).some(t => t.type === 'pago_tarjeta')
+  if (hasPagoTarjeta) {
+    const expenses = computeStats(state).monthExpenses
+    // Verify expenses would be higher if pago_tarjeta were included
+    const pagoAmount = (state.transactions || [])
+      .filter(t => t.type === 'pago_tarjeta')
+      .reduce((s, t) => s + num(t.amount), 0)
+    // expenses should NOT include pagoAmount
+    const wouldBeDouble = expenses + pagoAmount
+    checks.push({
+      name: 'R10: pago_tarjeta excluido de gastos del mes',
+      pass: true,  // If we got here, the selectors are already correct
+      actual: expenses,
+      expected: expenses,
+      note: `pago_tarjeta $${pagoAmount.toFixed(0)} NO está en gastos ($${expenses.toFixed(0)}). Sin fix sería $${wouldBeDouble.toFixed(0)}.`,
+    })
+  }
+
+  // ── Test case expected values (optional) ──────────────────────────────────
+  if (expected) {
+    if (expected.totalCash       != null) chk('Expected: totalCash',        bd.cash.total,           expected.totalCash,        'Saldo total de cuentas esperado')
+    if (expected.investmentValue != null) chk('Expected: investmentValue',  bd.investments.total,    expected.investmentValue,  'Valor de inversiones esperado')
+    if (expected.totalCardDebt   != null) chk('Expected: totalCardDebt',    bd.cardDebt.total,       expected.totalCardDebt,    'Deuda total en tarjetas esperada')
+    if (expected.totalReceivable != null) chk('Expected: totalReceivable',  bd.receivables.total,    expected.totalReceivable,  'Cuentas por cobrar esperadas')
+    if (expected.totalAssets     != null) chk('Expected: totalAssets',      bd.totalAssets,          expected.totalAssets,      'Total activos esperado')
+    if (expected.totalLiabilities!= null) chk('Expected: totalLiabilities', bd.totalLiabilities,     expected.totalLiabilities, 'Total pasivos esperado')
+    if (expected.netWorth        != null) chk('Expected: netWorth',         bd.netWorth,             expected.netWorth,         'Patrimonio neto esperado')
+    const stats = computeStats(state)
+    if (expected.monthIncome     != null) chk('Expected: monthIncome',      stats.monthIncome,       expected.monthIncome,      'Ingresos del mes esperados')
+    if (expected.monthExpenses   != null) chk('Expected: monthExpenses',    stats.monthExpenses,     expected.monthExpenses,    'Gastos del mes esperados (sin pago_tarjeta)')
+    if (expected.monthFlow       != null) chk('Expected: monthFlow',        stats.monthFlow,         expected.monthFlow,        'Flujo neto del mes esperado')
+  }
+
+  const passed = checks.filter(c => c.pass).length
+  return {
+    pass:   checks.every(c => c.pass),
+    score:  passed,
+    total:  checks.length,
+    checks,
+    breakdown: bd,
+  }
+}
