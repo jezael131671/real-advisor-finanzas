@@ -1,13 +1,23 @@
 import { useState, useRef, useCallback } from 'react'
 import {
   X, Camera, Upload, CheckCircle2, ChevronDown,
-  AlertCircle, RefreshCw, Sparkles,
+  AlertCircle, RefreshCw, Sparkles, TrendingUp, TrendingDown,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import useFinanceStore from '../../store/useFinanceStore.js'
 import { preprocessImage, analyzeCapture } from '../../lib/captureParser.js'
 import { computeStats } from '../../store/selectors.js'
 import { fmxD, uid, today } from '../../lib/formatters.js'
+
+// ── Product type metadata ──────────────────────────────────────────────────
+const PT = {
+  debit_account:       { label: 'Cuenta Débito',    badge: '💳 Débito',       color: '#059669' },
+  credit_card:         { label: 'Tarjeta Crédito',  badge: '💳 Crédito',      color: '#E11D48' },
+  savings_account:     { label: 'Cuenta Ahorro',    badge: '🏦 Ahorro',        color: '#0891B2' },
+  investment_account:  { label: 'Portafolio',       badge: '📊 Inversión',     color: '#4F46E5' },
+  loan:                { label: 'Préstamo',          badge: '💸 Préstamo',      color: '#D97706' },
+  unknown:             { label: 'Tipo desconocido',  badge: '❓ Manual',        color: '#6B7280' },
+}
 
 // ── Step IDs ───────────────────────────────────────────────────────────────
 const STEP = { UPLOAD: 0, ANALYZING: 1, REVIEW: 2, DONE: 3 }
@@ -127,9 +137,10 @@ export default function CaptureModal({ onClose }) {
   const [error,      setError]      = useState(null)
 
   // Review state
-  const [accountType, setAccountType] = useState('card')
-  const [values,      setValues]      = useState({})   // fieldKey → raw string
-  const [targetId,    setTargetId]    = useState('__new__')
+  const [accountType,         setAccountType]         = useState('card')
+  const [values,              setValues]              = useState({})
+  const [targetId,            setTargetId]            = useState('__new__')
+  const [confirmedMovements,  setConfirmedMovements]  = useState([])  // movement ids to register
 
   const fileInputRef = useRef(null)
 
@@ -164,37 +175,53 @@ export default function CaptureModal({ onClose }) {
     setError(null)
 
     try {
-      const blob     = await preprocessImage(imageFile)
-      const ocr      = await analyzeCapture(blob, setProgress)
-      const type     = ocr.defaultType === 'broker' ? 'broker' : ocr.defaultType
+      const blob = await preprocessImage(imageFile)
+      const ocr  = await analyzeCapture(blob, setProgress)
+      const cl   = ocr.classification
+      const type = ocr.defaultType  // already correctly mapped from productType
 
       setResult(ocr)
       setAccountType(type)
-      // Convert detected numeric values to strings for the editable inputs
+
+      // Convert detected numeric values to strings for editable inputs
       const init = {}
       for (const [k, v] of Object.entries(ocr.detected || {})) {
         if (v != null) init[k] = String(v)
       }
       setValues(init)
 
-      // Auto-select matching existing card or account
-      const instName = ocr.institution?.toLowerCase() ?? ''
+      // ── Smart auto-match using productType + last4 + institution ──────────
+      const instPrefix = cl.institution?.split(' ')[0]?.toLowerCase() ?? ''
+
       if (type === 'card') {
-        const match = cards.find(c =>
-          instName && c.bankName?.toLowerCase().startsWith(instName.split(' ')[0])
-        )
+        // Debit captures should NOT match credit cards
+        const match = cards.find(c => {
+          if (cl.last4 && c.last4 === cl.last4) return true
+          return instPrefix && c.bankName?.toLowerCase().startsWith(instPrefix)
+        })
         setTargetId(match?.id ?? '__new__')
+
       } else if (type === 'account') {
-        const match = accounts.find(a =>
-          instName && (
-            a.name?.toLowerCase().includes(instName.split(' ')[0]) ||
-            a.institution?.toLowerCase().includes(instName.split(' ')[0])
+        // Match by last4, linked account number, or institution
+        const match = accounts.find(a => {
+          if (cl.last4 && (a.last4 === cl.last4 || a.name?.includes(cl.last4))) return true
+          if (cl.linkedAccountLast4 && (
+            a.last4 === cl.linkedAccountLast4 ||
+            a.name?.includes(cl.linkedAccountLast4)
+          )) return true
+          return instPrefix && (
+            a.institution?.toLowerCase().startsWith(instPrefix) ||
+            a.name?.toLowerCase().includes(instPrefix)
           )
-        )
+        })
         setTargetId(match?.id ?? '__new__')
+
       } else {
         setTargetId('__ibkr__')
       }
+
+      // Init confirmed movements (none selected by default — user opts in)
+      setConfirmedMovements([])
 
       setStep(STEP.REVIEW)
     } catch (err) {
@@ -233,51 +260,107 @@ export default function CaptureModal({ onClose }) {
 
   // ── Confirm & apply to store ──────────────────────────────────────────────
   const handleConfirm = () => {
+    const cl          = result?.classification ?? {}
+    const productName = cl.productName || result?.institution || ''
+    const { addTransaction, transactions } = useFinanceStore.getState()
+
     if (accountType === 'card') {
       const payload = {}
-      const b = num('balance');           if (b  != null) payload.balance           = b
-      const l = num('limit');             if (l  != null) payload.limit             = l
-      const cd = day('cutDay');           if (cd != null) payload.cutDay            = cd
-      const dd = day('dueDay');           if (dd != null) payload.dueDay            = dd
-      const mp = num('minPayment');       if (mp != null) payload.minPayment        = mp
-      const ni = num('noInterestPayment');if (ni != null) payload.noInterestPayment = ni
+      const b  = num('balance');            if (b  != null) payload.balance           = b
+      const l  = num('limit');              if (l  != null) payload.limit             = l
+      const cd = day('cutDay');             if (cd != null) payload.cutDay            = cd
+      const dd = day('dueDay');             if (dd != null) payload.dueDay            = dd
+      const mp = num('minPayment');         if (mp != null) payload.minPayment        = mp
+      const ni = num('noInterestPayment');  if (ni != null) payload.noInterestPayment = ni
+      // Store last4 for future smart-matching
+      if (cl.last4) payload.last4 = cl.last4
 
       if (targetId === '__new__') {
-        const name = result?.institution || 'Nuevo'
-        addCard({ bankName: name, cardName: name, ...payload })
+        const name = productName || result?.institution || 'Nueva tarjeta'
+        addCard({ bankName: result?.institution || name, cardName: name, ...payload })
         toast.success(`Tarjeta ${name} creada ✓`)
       } else {
+        // Show previous vs new balance in toast
+        const prev = cards.find(x => x.id === targetId)?.balance ?? 0
         updateCard(targetId, payload)
-        const c = cards.find(x => x.id === targetId)
-        toast.success(`${c?.cardName || c?.bankName || 'Tarjeta'} actualizada ✓`)
+        const c   = cards.find(x => x.id === targetId)
+        const bal = b ?? 0
+        const diff = bal - prev
+        const name = c?.cardName || c?.bankName || 'Tarjeta'
+        if (prev !== 0 && diff !== 0) {
+          toast.success(`${name}: ${diff >= 0 ? '+' : ''}${fmxD(diff)} vs anterior ${fmxD(prev)}`)
+        } else {
+          toast.success(`${name} actualizada — saldo ${fmxD(bal)} ✓`)
+        }
       }
 
     } else if (accountType === 'account') {
       const b = num('balance')
-      if (b == null) { toast.error('Ingresa el saldo'); return }
+      if (b == null) { toast.error('Ingresa el saldo disponible'); return }
+      if (cl.last4) {}  // stored via addAccount/updateAccount below
 
       if (targetId === '__new__') {
-        const name = result?.institution || 'Nueva cuenta'
-        addAccount({ name, type: 'ahorro', balance: b })
-        toast.success(`Cuenta ${name} creada ✓`)
+        const name    = productName || result?.institution || 'Nueva cuenta'
+        const accType = cl.productType === 'savings_account' ? 'ahorro' : 'debito'
+        addAccount({ name, institution: result?.institution || name, type: accType, balance: b, last4: cl.last4 ?? undefined })
+        toast.success(`Cuenta ${name} creada — saldo ${fmxD(b)} ✓`)
       } else {
-        updateAccount(targetId, { balance: b })
-        const a = accounts.find(x => x.id === targetId)
-        toast.success(`${a?.name || 'Cuenta'} actualizada ✓`)
+        const prev = accounts.find(x => x.id === targetId)?.balance ?? 0
+        updateAccount(targetId, { balance: b, last4: cl.last4 ?? undefined })
+        const a    = accounts.find(x => x.id === targetId)
+        const diff = b - prev
+        const name = a?.name || 'Cuenta'
+        if (prev !== 0 && diff !== 0) {
+          toast.success(`${name}: ${diff >= 0 ? '+' : ''}${fmxD(diff)} vs anterior ${fmxD(prev)}`)
+        } else {
+          toast.success(`${name} actualizada — saldo ${fmxD(b)} ✓`)
+        }
       }
 
     } else {
       // broker or investment → goes into settings.ibkr
       const patch = {}
-      const nlv = num('nlv') ?? num('balance'); if (nlv != null) patch.lastNLV = nlv
-      const cash = num('cash');                 if (cash != null) patch.lastCash = cash
-      const upnl = num('unrealizedPnl');        if (upnl != null) patch.lastUnrealizedPnl = upnl
-      const dpnl = num('dailyPnl');             if (dpnl != null) patch.lastDailyPnl = dpnl
+      const nlv  = num('nlv') ?? num('balance'); if (nlv  != null) patch.lastNLV          = nlv
+      const cash = num('cash');                  if (cash != null) patch.lastCash         = cash
+      const upnl = num('unrealizedPnl');         if (upnl != null) patch.lastUnrealizedPnl = upnl
+      const dpnl = num('dailyPnl');              if (dpnl != null) patch.lastDailyPnl     = dpnl
       patch.syncedAt = new Date().toISOString()
       patch.source   = 'capture'
 
+      const prevNLV = settings?.ibkr?.lastNLV ?? 0
       updateSettings({ ibkr: { ...(settings?.ibkr ?? {}), ...patch } })
-      toast.success('Datos de inversión actualizados ✓')
+      const diff = (nlv ?? 0) - prevNLV
+      if (prevNLV !== 0 && diff !== 0) {
+        toast.success(`IBKR NLV: ${diff >= 0 ? '+' : ''}${fmxD(diff)} vs anterior ${fmxD(prevNLV)}`)
+      } else {
+        toast.success(`IBKR actualizado — NLV ${fmxD(nlv ?? 0)} ✓`)
+      }
+    }
+
+    // ── Register confirmed movements ────────────────────────────────────
+    if (confirmedMovements.length > 0) {
+      const allMovs = result?.movements ?? []
+      const toRegister = allMovs.filter(m => confirmedMovements.includes(m.id))
+      let registered = 0
+      toRegister.forEach(m => {
+        // Duplicate check: same date + amount + description prefix
+        const dup = (transactions || []).some(tx =>
+          tx.date === m.date &&
+          Math.abs(Number(tx.amount) - m.amount) < 0.01 &&
+          tx.description?.toLowerCase().startsWith(m.description.slice(0, 8).toLowerCase())
+        )
+        if (dup) return
+        addTransaction({
+          type:        m.type,
+          amount:      m.amount,
+          description: m.description,
+          date:        m.date,
+          accountId:   accountType === 'account' && targetId !== '__new__' ? targetId : undefined,
+          cardId:      accountType === 'card'    && targetId !== '__new__' ? targetId : undefined,
+        })
+        registered++
+      })
+      if (registered > 0) toast(`${registered} movimiento${registered !== 1 ? 's' : ''} registrado${registered !== 1 ? 's' : ''}`, { icon: '📋' })
     }
 
     setStep(STEP.DONE)
@@ -503,52 +586,81 @@ export default function CaptureModal({ onClose }) {
         )}
 
         {/* ══════════ STEP 2 — REVIEW ══════════ */}
-        {step === STEP.REVIEW && result && (
+        {step === STEP.REVIEW && result && (() => {
+          const cl       = result.classification ?? {}
+          const ptMeta   = PT[cl.productType] ?? PT.unknown
+          const movements = result.movements ?? []
+          const isNew    = targetId === '__new__' || targetId === '__ibkr__'
+          const prevBalance = !isNew
+            ? ([...accounts, ...cards].find(x => x.id === targetId)?.balance ?? 0)
+            : null
+          const newBal = parseFloat(String(values.balance || values.nlv || '').replace(/,/g, '')) || 0
+          const balDiff = prevBalance !== null ? newBal - prevBalance : null
+
+          // Balance impact calculation
+          let impactCash = 0, impactAssets = 0, impactLibs = 0, impactNet = 0, impactNote = ''
+          if (accountType === 'account') {
+            impactCash = newBal; impactAssets = newBal; impactNet = newBal
+            impactNote = 'Saldo disponible suma a efectivo y activos. No afecta pasivos.'
+          } else if (accountType === 'card') {
+            impactLibs = newBal; impactNet = -newBal
+            impactNote = 'Deuda en tarjeta suma a pasivos. Crédito disponible NO suma a activos.'
+          } else if (accountType === 'broker' || accountType === 'investment') {
+            const nlv = parseFloat(String(values.nlv || values.balance || '').replace(/,/g, '')) || 0
+            impactAssets = nlv; impactNet = nlv
+            impactNote = 'NLV suma a inversiones (activos). No afecta efectivo ni pasivos.'
+          }
+
+          return (
           <div className="flex-1 overflow-y-auto px-5 pb-6 space-y-4">
 
-            {/* Institution + type selector */}
-            <div className="flex items-center justify-between mt-1">
-              <div className="flex items-center gap-2">
-                <span className="text-xl">{result.institutionMeta?.icon ?? '📄'}</span>
-                <div>
-                  <p className="text-white font-black text-sm">
-                    {result.institution ?? 'Institución desconocida'}
+            {/* ── Product classification header ── */}
+            <div className="flex items-center justify-between mt-1 gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <span className="text-2xl shrink-0">{result.institutionMeta?.icon ?? '📄'}</span>
+                <div className="min-w-0">
+                  <p className="text-white font-black text-sm leading-tight truncate">
+                    {cl.productName || result.institution || 'Producto desconocido'}
                   </p>
-                  <p className="text-[11px]" style={{ color: result.institution ? '#4ADE80' : '#FBBF24' }}>
-                    {result.institution ? '✓ Detectada automáticamente' : '⚠ Verifica y ajusta los datos'}
-                  </p>
+                  <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                      style={{ background: `${ptMeta.color}22`, color: ptMeta.color }}>
+                      {ptMeta.badge}
+                    </span>
+                    {cl.confidence > 0 && (
+                      <span className="text-[9px] font-semibold"
+                        style={{ color: cl.confidence >= 0.7 ? '#4ADE80' : '#FBBF24' }}>
+                        {cl.confidence >= 0.7 ? '✓ Alta confianza' : '⚠ Verifica el tipo'}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              <div className="relative">
+              {/* Type override selector */}
+              <div className="relative shrink-0">
                 <select
                   value={accountType}
                   onChange={e => { setAccountType(e.target.value); setValues({}) }}
-                  className="appearance-none text-xs font-bold pl-3 pr-7 py-2 rounded-xl"
-                  style={{
-                    background: 'rgba(79,70,229,0.14)',
-                    border: '1px solid rgba(79,70,229,0.28)',
-                    color: '#818CF8',
-                  }}
-                >
-                  <option value="card">Tarjeta</option>
+                  className="appearance-none text-[11px] font-bold pl-2.5 pr-6 py-1.5 rounded-xl"
+                  style={{ background:'rgba(79,70,229,0.14)', border:'1px solid rgba(79,70,229,0.28)', color:'#818CF8' }}>
                   <option value="account">Cuenta</option>
-                  <option value="broker">Broker / IBKR</option>
+                  <option value="card">Tarjeta crédito</option>
+                  <option value="broker">Broker/IBKR</option>
                   <option value="investment">Inversión</option>
                 </select>
-                <ChevronDown size={12} color="#818CF8"
-                  className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <ChevronDown size={11} color="#818CF8"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none" />
               </div>
             </div>
 
             {/* Thumbnail */}
             {imageUrl && (
-              <img src={imageUrl} alt="captura"
-                className="w-full rounded-2xl object-cover"
-                style={{ maxHeight: 130, border: '1px solid rgba(255,255,255,0.06)' }} />
+              <img src={imageUrl} alt="captura" className="w-full rounded-2xl object-cover"
+                style={{ maxHeight: 110, border: '1px solid rgba(255,255,255,0.06)' }} />
             )}
 
-            {/* Fields */}
+            {/* ── Detected fields ── */}
             <div className="rounded-2xl overflow-hidden"
               style={{ background: '#13131F', border: '1px solid rgba(255,255,255,0.05)' }}>
               <div className="px-4 py-2.5 border-b flex items-center gap-1.5"
@@ -557,30 +669,30 @@ export default function CaptureModal({ onClose }) {
                 <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: '#818CF8' }}>
                   Datos detectados — edita si es necesario
                 </span>
+                {cl.last4 && (
+                  <span className="ml-auto text-[10px] font-semibold px-2 py-0.5 rounded-lg"
+                    style={{ background:'rgba(79,70,229,0.15)', color:'#818CF8' }}>
+                    •{cl.last4}
+                  </span>
+                )}
               </div>
               <div className="px-4 py-1">
                 {activeFields.map(def => (
-                  <FieldRow
-                    key={def.key}
-                    def={def}
-                    value={displayValue(def)}
-                    onChange={setValue}
-                    wasDetected={result.detected?.[def.key] != null}
-                  />
+                  <FieldRow key={def.key} def={def} value={displayValue(def)}
+                    onChange={setValue} wasDetected={result.detected?.[def.key] != null} />
                 ))}
-
-                {/* Fallback: clickable amount chips when institution unknown */}
+                {/* Fallback amount chips when no institution detected */}
                 {!result.institution && result.topAmounts?.length > 0 && (
                   <div className="py-2">
                     <p className="text-[11px] mb-2" style={{ color: '#555577' }}>
-                      Montos detectados — toca para asignar al primer campo:
+                      Montos detectados — toca para asignar:
                     </p>
                     <div className="flex flex-wrap gap-1.5">
                       {result.topAmounts.map((amt, i) => (
                         <button key={i}
                           onClick={() => setValue(activeFields[0]?.key ?? 'balance', String(amt))}
                           className="btn-press px-2.5 py-1 rounded-lg text-xs font-bold"
-                          style={{ background: 'rgba(79,70,229,0.15)', color: '#818CF8', border: '1px solid rgba(79,70,229,0.2)' }}>
+                          style={{ background:'rgba(79,70,229,0.15)', color:'#818CF8', border:'1px solid rgba(79,70,229,0.2)' }}>
                           {fmxD(amt)}
                         </button>
                       ))}
@@ -590,30 +702,135 @@ export default function CaptureModal({ onClose }) {
               </div>
             </div>
 
-            {/* Aplicar a */}
+            {/* ── Impacto estimado en patrimonio ── */}
+            {newBal > 0 && (
+              <div className="rounded-2xl p-3.5"
+                style={{ background:'rgba(74,222,128,0.06)', border:'1px solid rgba(74,222,128,0.14)' }}>
+                <p className="text-[10px] font-bold uppercase tracking-wider mb-2.5"
+                  style={{ color:'#4ADE80' }}>Impacto estimado en patrimonio</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { label:'Efectivo',    v: impactCash,   show: impactCash   !== 0 },
+                    { label:'Activos',     v: impactAssets, show: true              },
+                    { label:'Pasivos',     v: impactLibs,   show: impactLibs   !== 0 },
+                    { label:'Patrimonio',  v: impactNet,    show: true              },
+                  ].filter(x => x.show).map(({ label, v }) => (
+                    <div key={label} className="rounded-xl px-3 py-2"
+                      style={{ background:'rgba(0,0,0,0.20)' }}>
+                      <p style={{ fontSize:9, color:'rgba(74,222,128,0.55)', textTransform:'uppercase', marginBottom:2 }}>{label}</p>
+                      <p className="font-black text-sm" style={{ color: v >= 0 ? '#4ADE80' : '#F87171' }}>
+                        {v >= 0 ? '+' : ''}{fmxD(Math.abs(v))}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+                <p style={{ fontSize:9, color:'rgba(74,222,128,0.40)', marginTop:6 }}>{impactNote}</p>
+              </div>
+            )}
+
+            {/* ── Comparación con saldo anterior ── */}
+            {prevBalance !== null && prevBalance !== 0 && balDiff !== null && balDiff !== 0 && (
+              <div className="rounded-2xl p-3.5"
+                style={{ background:'rgba(79,70,229,0.08)', border:'1px solid rgba(79,70,229,0.18)' }}>
+                <p className="text-[10px] font-bold uppercase tracking-wider mb-2"
+                  style={{ color:'#818CF8' }}>Comparación con saldo anterior</p>
+                <div className="flex items-center gap-3">
+                  <div>
+                    <p style={{ fontSize:9, color:'rgba(129,140,248,0.55)' }}>Anterior</p>
+                    <p className="text-sm font-bold" style={{ color:'rgba(129,140,248,0.75)' }}>{fmxD(prevBalance)}</p>
+                  </div>
+                  <div style={{ fontSize:18, color:'rgba(129,140,248,0.40)' }}>→</div>
+                  <div>
+                    <p style={{ fontSize:9, color:'rgba(129,140,248,0.55)' }}>Nuevo</p>
+                    <p className="text-sm font-bold text-white">{fmxD(newBal)}</p>
+                  </div>
+                  <div className="ml-auto text-right">
+                    <p style={{ fontSize:9, color:'rgba(129,140,248,0.55)' }}>Diferencia</p>
+                    <p className="text-sm font-bold"
+                      style={{ color: balDiff >= 0 ? '#4ADE80' : '#F87171' }}>
+                      {balDiff >= 0 ? '+' : ''}{fmxD(balDiff)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── Movimientos detectados ── */}
+            {movements.length > 0 && (
+              <div className="rounded-2xl overflow-hidden"
+                style={{ background:'#13131F', border:'1px solid rgba(255,255,255,0.05)' }}>
+                <div className="px-4 py-2.5 border-b flex items-center justify-between"
+                  style={{ borderColor:'rgba(255,255,255,0.05)' }}>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color:'#8B8BAD' }}>
+                      Movimientos detectados
+                    </span>
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full"
+                      style={{ background:'rgba(79,70,229,0.15)', color:'#818CF8' }}>
+                      {confirmedMovements.length}/{movements.length} seleccionados
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setConfirmedMovements(
+                      confirmedMovements.length === movements.length ? [] : movements.map(m => m.id)
+                    )}
+                    className="text-[10px] font-bold"
+                    style={{ color:'#818CF8' }}>
+                    {confirmedMovements.length === movements.length ? 'Ninguno' : 'Todos'}
+                  </button>
+                </div>
+                <div className="divide-y" style={{ borderColor:'rgba(255,255,255,0.04)' }}>
+                  {movements.map(m => {
+                    const checked = confirmedMovements.includes(m.id)
+                    return (
+                      <button key={m.id}
+                        onClick={() => setConfirmedMovements(prev =>
+                          checked ? prev.filter(id => id !== m.id) : [...prev, m.id]
+                        )}
+                        className="btn-press w-full flex items-center gap-3 px-4 py-2.5 text-left"
+                        style={{ background: checked ? 'rgba(79,70,229,0.08)' : 'transparent' }}>
+                        <div className="w-4 h-4 rounded border flex items-center justify-center shrink-0"
+                          style={{ borderColor: checked ? '#818CF8' : 'rgba(255,255,255,0.15)',
+                            background: checked ? 'rgba(79,70,229,0.25)' : 'transparent' }}>
+                          {checked && <span style={{ fontSize:10, color:'#818CF8' }}>✓</span>}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold truncate" style={{ color:'var(--t1)' }}>
+                            {m.description}
+                          </p>
+                          <p className="text-[10px]" style={{ color:'var(--t3)' }}>{m.date}</p>
+                        </div>
+                        <span className="text-xs font-bold shrink-0"
+                          style={{ color: m.sign === 'debit' ? '#F87171' : '#4ADE80' }}>
+                          {m.sign === 'debit' ? '−' : '+'}{fmxD(m.amount)}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+                {confirmedMovements.length > 0 && (
+                  <div className="px-4 py-2" style={{ borderTop:'1px solid rgba(255,255,255,0.04)' }}>
+                    <p className="text-[9px]" style={{ color:'rgba(129,140,248,0.55)' }}>
+                      ✓ Se registrarán al confirmar. Se omiten duplicados.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Aplicar a ── */}
             <div className="rounded-2xl overflow-hidden"
               style={{ background: '#13131F', border: '1px solid rgba(255,255,255,0.05)' }}>
-              <div className="px-4 py-2.5 border-b" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
-                <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color: '#8B8BAD' }}>
+              <div className="px-4 py-2.5 border-b" style={{ borderColor:'rgba(255,255,255,0.05)' }}>
+                <span className="text-[11px] font-bold uppercase tracking-wider" style={{ color:'#8B8BAD' }}>
                   Aplicar a
                 </span>
               </div>
               <div className="px-4 py-3 relative">
-                <select
-                  value={targetId}
-                  onChange={e => setTargetId(e.target.value)}
-                  style={{
-                    width: '100%',
-                    appearance: 'none',
-                    background: 'rgba(255,255,255,0.04)',
-                    border: '1px solid rgba(255,255,255,0.08)',
-                    color: 'var(--t1)',
-                    borderRadius: 12,
-                    padding: '10px 36px 10px 12px',
-                    fontSize: 14,
-                    fontWeight: 600,
-                  }}
-                >
+                <select value={targetId} onChange={e => setTargetId(e.target.value)}
+                  style={{ width:'100%', appearance:'none', background:'rgba(255,255,255,0.04)',
+                    border:'1px solid rgba(255,255,255,0.08)', color:'var(--t1)',
+                    borderRadius:12, padding:'10px 36px 10px 12px', fontSize:14, fontWeight:600 }}>
                   {targetOptions.map(o => (
                     <option key={o.id} value={o.id}>{o.label}</option>
                   ))}
@@ -623,16 +840,15 @@ export default function CaptureModal({ onClose }) {
               </div>
             </div>
 
-            {/* Confirm */}
-            <button
-              onClick={handleConfirm}
+            {/* ── Confirm ── */}
+            <button onClick={handleConfirm}
               className="btn-press w-full py-4 rounded-2xl text-white font-black text-base flex items-center justify-center gap-2"
-              style={{ background: 'linear-gradient(135deg,#4F46E5,#6366F1)', boxShadow: '0 4px 20px rgba(79,70,229,0.28)' }}
-            >
+              style={{ background:'linear-gradient(135deg,#4F46E5,#6366F1)', boxShadow:'0 4px 20px rgba(79,70,229,0.28)' }}>
               <CheckCircle2 size={18} /> Confirmar y actualizar
             </button>
           </div>
-        )}
+          )
+        })()}
 
         {/* ══════════ STEP 3 — DONE ══════════ */}
         {step === STEP.DONE && (

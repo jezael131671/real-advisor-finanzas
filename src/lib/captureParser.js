@@ -288,6 +288,220 @@ function extractTopAmounts(text) {
   return [...new Set(all)].sort((a, b) => b - a).slice(0, 8)
 }
 
+// ── Product type classification ─────────────────────────────────────────────
+// Determines the FINANCIAL PRODUCT TYPE from OCR text, independent of institution.
+// This fixes the bug where BBVA debit screenshots were classified as credit cards.
+//
+// productType: 'debit_account' | 'credit_card' | 'savings_account' |
+//              'investment_account' | 'loan' | 'unknown'
+// ──────────────────────────────────────────────────────────────────────────
+
+const PRODUCT_RULES = {
+  investment_account: {
+    positive: [
+      /net\s+liquidation/i, /market\s+value/i, /total\s+cash/i,
+      /day.?s?\s+p.?[&l]/i, /unrealized/i, /positions/i,
+      /\bIBKR\b/i, /\bTWS\b/i, /portfolio\s+value/i, /net\s+liq/i,
+    ],
+    negative: [],
+    weight: 4,
+  },
+  credit_card: {
+    positive: [
+      /saldo\s+adeudado/i, /l[ií]mite\s+de\s+cr[eé]dito/i,
+      /cr[eé]dito\s+disponible/i, /pago\s+m[íi]nimo/i,
+      /pago\s+sin\s+intereses/i, /d[íi]a\s+de\s+corte/i,
+      /fecha\s+l[íi]mite/i, /fecha\s+de\s+corte/i,
+      /pago\s+para\s+no\s+generar/i, /tu\s+deuda/i,
+    ],
+    negative: [
+      /visa\s+d[eé]bito/i, /tarjeta\s+de\s+d[eé]bito/i,
+      /cuenta\s+asociada/i,
+    ],
+    weight: 3,
+  },
+  debit_account: {
+    positive: [
+      /visa\s+d[eé]bito/i, /tarjeta\s+de\s+d[eé]bito/i,
+      /cuenta\s+asociada/i, /saldo\s+disponible/i,
+      /d[eé]bito/i, /cuenta\s+de\s+d[eé]bito/i,
+      /disponible\s+en\s+cuenta/i,
+    ],
+    negative: [
+      /pago\s+m[íi]nimo/i, /l[íi]mite\s+de\s+cr[eé]dito/i,
+      /saldo\s+adeudado/i, /pago\s+sin\s+intereses/i,
+    ],
+    weight: 3,
+  },
+  savings_account: {
+    positive: [
+      /rendimiento/i, /tasa\s+de\s+inter[eé]s/i,
+      /cuenta\+/i, /ahorro/i, /fondo\s+de/i,
+      /invertido/i, /garant[íi]a/i,
+    ],
+    negative: [
+      /visa\s+d[eé]bito/i, /pago\s+m[íi]nimo/i,
+    ],
+    weight: 2,
+  },
+  loan: {
+    positive: [
+      /pr[eé]stamo/i, /cr[eé]dito\s+personal/i,
+      /saldo\s+insoluto/i, /mensualidad/i, /adeudo/i,
+    ],
+    negative: [],
+    weight: 2,
+  },
+}
+
+export function classifyCapture(rawText, lines) {
+  const institution = detectInstitution(rawText)
+  const scores = {}
+
+  // Score each product type
+  for (const [type, rule] of Object.entries(PRODUCT_RULES)) {
+    let s = 0
+    rule.positive.forEach(re => { if (re.test(rawText)) s += rule.weight })
+    rule.negative.forEach(re => { if (re.test(rawText)) s -= rule.weight * 2 })
+    scores[type] = s
+  }
+
+  // Institution-level strong priors
+  if (institution?.name === 'IBKR')         scores.investment_account += 10
+  if (institution?.name === 'GBM+')         scores.investment_account += 10
+  if (institution?.name === 'Revolut')      scores.debit_account      += 2
+  if (institution?.name === 'Mercado Pago') scores.debit_account      += 1
+  if (institution?.defaultType === 'broker') scores.investment_account += 5
+
+  // Pick winner — must have positive score
+  let productType = 'unknown'
+  let maxScore    = 0
+  for (const [type, score] of Object.entries(scores)) {
+    if (score > maxScore) { maxScore = score; productType = type }
+  }
+
+  // ── Extract card / account terminal digits ─────────────────────────────
+  // Matches: •0084  ***0084  ****0084  terminación 0084
+  const last4Match = rawText.match(/[•·*]{2,}\s*(\d{4})\b/)
+    || rawText.match(/terminaci[oó]n[:\s]+(\d{4})/i)
+    || rawText.match(/\*{3,}\s*(\d{4})/)
+  const last4 = last4Match?.[1] ?? null
+
+  // Linked account: •82638 (up to 5 digits after bullet)
+  const linkedMatch = rawText.match(/cuenta\s+asociada[^•·*\d]*[•·*]+\s*(\d{3,6})/i)
+    || rawText.match(/cuenta\s+n[uú]m[ero]*[^•·*\d]*[•·*]+\s*(\d{3,6})/i)
+  const linkedAccountLast4 = linkedMatch ? linkedMatch[1].slice(-4) : null
+
+  // Currency
+  const currency = /\bUSD\b|u\.s\.\s*dollar/i.test(rawText) ? 'USD' : 'MXN'
+
+  // ── Build product name ─────────────────────────────────────────────────
+  let productName = institution?.name ?? ''
+  if (/visa\s+d[eé]bito/i.test(rawText))       productName += ' Débito'
+  else if (/oro\b/i.test(rawText) && productType === 'credit_card') productName += ' Oro'
+  else if (/cuenta\+/i.test(rawText))            productName += ' Cuenta+'
+  else if (/garant[íi]a/i.test(rawText))         productName += ' Garantía'
+  else if (productType === 'credit_card')         productName += ' Crédito'
+  else if (productType === 'debit_account')       productName += ' Débito'
+  else if (productType === 'savings_account')     productName += ' Ahorro'
+  else if (productType === 'investment_account')  productName += ' Portfolio'
+  if (last4 && productType !== 'investment_account') productName += ` •${last4}`
+
+  const confidence = Math.min(1, maxScore / 12)
+
+  // ── Suggested action (human-readable) ─────────────────────────────────
+  const suggestedAction = {
+    debit_account:       'Actualizar saldo de cuenta débito',
+    credit_card:         'Actualizar saldo de tarjeta de crédito',
+    savings_account:     'Actualizar saldo de cuenta de ahorro',
+    investment_account:  'Actualizar NLV de portafolio IBKR',
+    loan:                'Actualizar saldo de préstamo',
+    unknown:             'Revisar y clasificar manualmente',
+  }[productType] ?? 'Revisar manualmente'
+
+  return {
+    institution:        institution?.name          ?? null,
+    institutionMeta:    institution                ?? null,
+    productType,
+    productName:        productName.trim(),
+    last4,
+    linkedAccountLast4,
+    currency,
+    confidence,
+    scores,
+    suggestedAction,
+  }
+}
+
+// ── Movement detection ──────────────────────────────────────────────────────
+// Extracts visible transactions from the OCR text (e.g. account statement lines).
+// Returns up to 5 movement candidates with status='pending'.
+// ──────────────────────────────────────────────────────────────────────────
+const MONTH_MAP = {
+  enero:1,febrero:2,marzo:3,abril:4,mayo:5,junio:6,
+  julio:7,agosto:8,septiembre:9,octubre:10,noviembre:11,diciembre:12,
+  jan:1,feb:2,mar:3,apr:4,may:5,jun:6,
+  jul:7,aug:8,sep:9,oct:10,nov:11,dec:12,
+}
+
+export function detectMovements(rawText, lines) {
+  const movements = []
+  const seen = new Set()
+  const year  = new Date().getFullYear()
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+
+    // Match a signed/negative amount: -$150.00  –150.00  +$200
+    const amtMatch = line.match(/([+\-–−])\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/)
+    if (!amtMatch) continue
+
+    const sign   = amtMatch[1] === '+' ? 'credit' : 'debit'
+    const amount = parseAmount(amtMatch[2])
+    if (!amount || amount < 1 || amount > 1_000_000) continue
+
+    const key = `${sign}-${amount.toFixed(2)}`
+    if (seen.has(key)) continue
+    seen.add(key)
+
+    // Build description from context
+    const ctx = [lines[i - 2], lines[i - 1], line, lines[i + 1]]
+      .filter(Boolean)
+      .join(' ')
+    const desc = ctx
+      .replace(/[+\-–−]?\$?\s*[\d,]+(?:\.\d{1,2})?/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+      .slice(0, 60) || 'Movimiento detectado'
+
+    // Detect date in context
+    let date = new Date().toISOString().split('T')[0]
+    const dMatch = ctx.match(/(\d{1,2})\s+de\s+(\w+)/i)
+      || ctx.match(/(\d{1,2})[/\-](\d{1,2})/)
+    if (dMatch) {
+      const day   = parseInt(dMatch[1])
+      const month = MONTH_MAP[dMatch[2]?.toLowerCase()] ?? parseInt(dMatch[2])
+      if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+        date = `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`
+      }
+    }
+
+    movements.push({
+      id:          `mov-${Date.now()}-${i}`,
+      description: desc,
+      amount,
+      sign,
+      type:        sign === 'debit' ? 'gasto' : 'ingreso',
+      date,
+      status:      'pending',
+    })
+
+    if (movements.length >= 5) break
+  }
+
+  return movements
+}
+
 // ── Main export ────────────────────────────────────────────────────────────
 export async function analyzeCapture(imageBlob, onProgress) {
   // Dynamic import — Tesseract (~1MB) only loads when the user opens this modal
@@ -328,7 +542,9 @@ export async function analyzeCapture(imageBlob, onProgress) {
     .map(l => l.trim())
     .filter(l => l.length > 1)   // drop single-char noise lines
 
-  const institution = detectInstitution(rawText)
+  const institution  = detectInstitution(rawText)
+  const classification = classifyCapture(rawText, lines)
+  const movements    = detectMovements(rawText, lines)
 
   // Extract typed fields for detected institution
   const detected = {}
@@ -340,13 +556,26 @@ export async function analyzeCapture(imageBlob, onProgress) {
     }
   }
 
+  // productType → modal accountType mapping
+  const typeMap = {
+    investment_account: 'broker',
+    credit_card:        'card',
+    debit_account:      'account',
+    savings_account:    'account',
+    loan:               'account',
+    unknown:            institution?.defaultType ?? 'account',
+  }
+
   return {
     institution:     institution?.name        ?? null,
     institutionMeta: institution              ?? null,
-    defaultType:     institution?.defaultType ?? 'account',
+    defaultType:     typeMap[classification.productType] ?? (institution?.defaultType ?? 'account'),
     detected,
-    topAmounts: extractTopAmounts(rawText),
+    topAmounts:      extractTopAmounts(rawText),
     rawText,
     lines,
+    // ── New classification fields ──────────────────────────────────────
+    classification,
+    movements,
   }
 }
