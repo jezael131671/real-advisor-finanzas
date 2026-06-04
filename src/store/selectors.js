@@ -74,9 +74,15 @@ export const computeStats = (state) => {
 
   const totalCash = accounts.reduce((s, a) => s + num(a.balance), 0)
 
+  // Rule 6: IBKR NLV is the authoritative IBKR total when available.
+  // When NLV > 0, skip investments tagged broker='ibkr' or ibkrSynced=true
+  // (NLV already covers stocks + options + cash + unrealizedPnL — no double-counting).
+  const nlvFromCapture = num(settings?.ibkr?.lastNLV)
+
   let investmentValue = 0
   let investmentCost  = 0
   investments.forEach(inv => {
+    if (nlvFromCapture > 0 && (inv.broker === 'ibkr' || inv.ibkrSynced)) return
     const qty  = num(inv.quantity)
     const buy  = num(inv.buyPrice)
     const curr = num(inv.currentPrice || inv.buyPrice)
@@ -84,15 +90,11 @@ export const computeStats = (state) => {
     investmentValue += qty * curr * mult
     investmentCost  += qty * buy  * mult
   })
-
-  // When no individual IBKR positions are tracked, use the NLV from the last
-  // capture as the portfolio value. investmentCost = NLV so P&L stays 0 here
-  // (actual P&L is shown separately via settings.ibkr.lastUnrealizedPnl).
-  const hasIbkrPositions = investments.some(i => i.ibkrSynced)
-  const ibkrNLV = !hasIbkrPositions ? num(settings?.ibkr?.lastNLV) : 0
-  if (ibkrNLV > 0) {
-    investmentValue += ibkrNLV
-    investmentCost  += ibkrNLV
+  // Add IBKR NLV as lump-sum (cost = NLV so portfolio P&L = 0 here;
+  // actual unrealized/daily P&L lives in settings.ibkr separately).
+  if (nlvFromCapture > 0) {
+    investmentValue += nlvFromCapture
+    investmentCost  += nlvFromCapture
   }
 
   const investmentPnL = investmentValue - investmentCost
@@ -104,7 +106,14 @@ export const computeStats = (state) => {
   const totalCardLimit = cards.reduce((s, c) => s + num(c.limit), 0)
   const creditUtil     = totalCardLimit > 0 ? (totalCardDebt / totalCardLimit) * 100 : 0
 
-  const totalAssets      = totalCash + investmentValue + manualAssets
+  // Rule 8: Bajoquintos receivable = active pending payments = accounts receivable (asset).
+  const totalReceivable = bajoquintos.reduce((sum, b) => {
+    if (['liquidado','entregado','testimonio','perdido'].includes(b.status)) return sum
+    const paid    = num(b.deposit) + (b.payments||[]).reduce((s,p) => s + num(p.amount), 0)
+    return sum + Math.max(0, num(b.salePrice) - paid)
+  }, 0)
+
+  const totalAssets      = totalCash + investmentValue + manualAssets + totalReceivable
   const totalLiabilities = totalCardDebt + manualLiabilities
   const netWorth         = totalAssets - totalLiabilities
 
@@ -118,11 +127,13 @@ export const computeStats = (state) => {
     const amt = num(tx.amount)
     if (inMonth(tx, start, end)) {
       if (tx.type === 'ingreso' || tx.type === 'bajoquinto') monthIncome   += amt
-      if (tx.type === 'gasto'   || tx.type === 'pago_tarjeta' || tx.type === 'inversion') monthExpenses += amt
+      // Rule 10: pago_tarjeta excluded — the expense was already counted when
+      // the card was charged (gasto). Counting the payment again = double-count.
+      if (tx.type === 'gasto' || tx.type === 'inversion') monthExpenses += amt
     }
     if (inMonth(tx, prevStart, prevEnd)) {
       if (tx.type === 'ingreso' || tx.type === 'bajoquinto') prevMonthIncome   += amt
-      if (tx.type === 'gasto'   || tx.type === 'pago_tarjeta' || tx.type === 'inversion') prevMonthExpenses += amt
+      if (tx.type === 'gasto' || tx.type === 'inversion') prevMonthExpenses += amt
     }
   })
 
@@ -189,6 +200,7 @@ export const computeStats = (state) => {
     totalCardDebt, totalCardLimit, creditUtil,
     monthIncome, monthExpenses, monthFlow,
     prevMonthIncome, prevMonthExpenses, prevMonthFlow,
+    totalReceivable,
     bqStats: { totalSales, totalProfit, totalPending, totalDeposits, totalCollected, pendingCount, activeCount },
     upcomingCards, upcomingSubs,
   }
@@ -305,7 +317,7 @@ export const computeMonthlyFlow = (transactions = []) => {
         if (!isWithinInterval(txDate, { start, end })) return
         const amt = num(tx.amount)
         if (tx.type === 'ingreso' || tx.type === 'bajoquinto') income  += amt
-        if (tx.type === 'gasto'   || tx.type === 'pago_tarjeta' || tx.type === 'inversion') expense += amt
+        if (tx.type === 'gasto'   || tx.type === 'inversion') expense += amt
       } catch {}
     })
     months.push({ label, income, expense, net: income - expense })
@@ -496,7 +508,7 @@ export const computePlannerData = (state) => {
       if (!isWithinInterval(d, { start: monthStart, end: monthEnd })) return
       const amt = num(tx.amount)
       if (tx.type === 'ingreso' || tx.type === 'bajoquinto') projectedIncome   += amt
-      if (tx.type === 'gasto'   || tx.type === 'pago_tarjeta') projectedExpenses += amt
+      if (tx.type === 'gasto') projectedExpenses += amt
     } catch {}
   })
   projectedIncome   += cf30.totalInflows
@@ -577,16 +589,22 @@ export const computeMetaInsights = (state) => {
 
   const totalCash     = accounts.reduce((s, a) => s + num(a.balance), 0)
   const totalCardDebt = cards.reduce((s, c) => s + num(c.balance), 0)
+  const _nlvMI = num(settings?.ibkr?.lastNLV)
   let investmentValue = 0
   investments.forEach(inv => {
+    if (_nlvMI > 0 && (inv.broker === 'ibkr' || inv.ibkrSynced)) return
     investmentValue += num(inv.quantity) * num(inv.currentPrice || inv.buyPrice) * (isOptType(inv.type) ? 100 : 1)
   })
-  // Fallback: IBKR NLV from last capture when no synced positions
-  if (!investments.some(i => i.ibkrSynced)) {
-    investmentValue += num(settings?.ibkr?.lastNLV)
-  }
+  if (_nlvMI > 0) investmentValue += _nlvMI
+
+  const _receivMI = bajoquintos.reduce((s, b) => {
+    if (['liquidado','entregado','testimonio','perdido'].includes(b.status)) return s
+    const paid = num(b.deposit) + (b.payments||[]).reduce((a,p) => a + num(p.amount), 0)
+    return s + Math.max(0, num(b.salePrice) - paid)
+  }, 0)
   const totalAssets = totalCash + investmentValue
     + assets.filter(a => a.isActive !== false).reduce((s, a) => s + num(a.value), 0)
+    + _receivMI
   const totalLiabilities = totalCardDebt
     + liabilities.filter(l => l.isActive !== false).reduce((s, l) => s + num(l.amount), 0)
   const netWorth = totalAssets - totalLiabilities
@@ -614,7 +632,7 @@ export const computeMetaInsights = (state) => {
       if (!isWithinInterval(d, { start: monthStart, end: monthEnd })) return
       const amt = num(tx.amount)
       if (tx.type === 'ingreso' || tx.type === 'bajoquinto') monthIncome   += amt
-      if (tx.type === 'gasto'   || tx.type === 'pago_tarjeta') monthExpenses += amt
+      if (tx.type === 'gasto') monthExpenses += amt
     } catch {}
   })
   const monthlyAvailable = Math.max(0, monthIncome - monthExpenses)
@@ -682,14 +700,13 @@ export const computeAdvisorScore = (state) => {
   const totalCardLimit = cards.reduce((s, c) => s + num(c.limit), 0)
   const creditUtil     = totalCardLimit > 0 ? (totalCardDebt / totalCardLimit) * 100 : 0
 
+  const _nlvAS = num(settings?.ibkr?.lastNLV)
   let investmentValue = 0
   investments.forEach(inv => {
+    if (_nlvAS > 0 && (inv.broker === 'ibkr' || inv.ibkrSynced)) return
     investmentValue += num(inv.quantity) * num(inv.currentPrice || inv.buyPrice) * (isOptType(inv.type) ? 100 : 1)
   })
-  // Fallback: IBKR NLV from last capture when no synced positions
-  if (!investments.some(i => i.ibkrSynced)) {
-    investmentValue += num(settings?.ibkr?.lastNLV)
-  }
+  if (_nlvAS > 0) investmentValue += _nlvAS
 
   const monthStart = startOfMonth(now)
   const monthEnd   = endOfMonth(now)
@@ -699,8 +716,8 @@ export const computeAdvisorScore = (state) => {
       const d = parseDate(tx.date)
       if (!isWithinInterval(d, { start: monthStart, end: monthEnd })) return
       const amt = num(tx.amount)
-      if (tx.type === 'ingreso' || tx.type === 'bajoquinto')       monthIncome   += amt
-      if (tx.type === 'gasto'   || tx.type === 'pago_tarjeta' || tx.type === 'inversion') monthExpenses += amt
+      if (tx.type === 'ingreso' || tx.type === 'bajoquinto') monthIncome   += amt
+      if (tx.type === 'gasto'   || tx.type === 'inversion')  monthExpenses += amt
     } catch {}
   })
   const monthFlow = monthIncome - monthExpenses
@@ -870,4 +887,109 @@ export const computeAdvisorScore = (state) => {
   insights.sort((a, b) => (IORD[a.priority] ?? 2) - (IORD[b.priority] ?? 2))
 
   return { total, label, labelColor, dimensions, insights }
+}
+
+// ── computeBreakdown ──────────────────────────────────────────────────────────
+// Structured desglose of every number on the Dashboard.
+// Use this for "Desglose de cálculo" views and audit trails.
+export const computeBreakdown = (state) => {
+  const stats = computeStats(state)
+  const {
+    accounts = [], cards = [], investments = [], assets = [],
+    liabilities = [], bajoquintos = [], settings = {},
+  } = state
+
+  const nlv      = num(settings?.ibkr?.lastNLV)
+  const ibkrSnap = settings?.ibkr ?? {}
+
+  // Non-IBKR positions (excluded if NLV covers them)
+  const visiblePositions = investments.filter(i =>
+    !(nlv > 0 && (i.broker === 'ibkr' || i.ibkrSynced))
+  )
+
+  // Receivable detail
+  const receivableItems = bajoquintos
+    .filter(b => !['liquidado','entregado','testimonio','perdido'].includes(b.status))
+    .map(b => {
+      const paid    = num(b.deposit) + (b.payments||[]).reduce((s,p) => s + num(p.amount), 0)
+      const pending = Math.max(0, num(b.salePrice) - paid)
+      return pending > 0 ? { id: b.id, name: b.client, model: b.model||'', amount: pending } : null
+    })
+    .filter(Boolean)
+
+  return {
+    // ── Activos ──────────────────────────────────────────────────────────────
+    cash: {
+      total: stats.totalCash,
+      formula: 'Σ account.balance',
+      items: accounts.map(a => ({ id: a.id, name: a.name || a.institution, amount: num(a.balance) })),
+    },
+    investments: {
+      total:          stats.investmentValue,
+      formula:        nlv > 0 ? `IBKR NLV $${nlv.toLocaleString()} + otras posiciones` : 'Σ qty × precio_actual',
+      ibkrNLV:        nlv > 0 ? nlv : null,
+      ibkrCash:       nlv > 0 ? num(ibkrSnap.lastCash) : null,
+      ibkrUnrealized: nlv > 0 ? num(ibkrSnap.lastUnrealizedPnl) : null,
+      ibkrDailyPnl:   nlv > 0 ? num(ibkrSnap.lastDailyPnl) : null,
+      ibkrSyncedAt:   ibkrSnap.syncedAt ?? null,
+      ibkrSource:     ibkrSnap.source   ?? null,
+      positions: visiblePositions.map(i => ({
+        id: i.id, ticker: i.ticker || i.asset,
+        qty: num(i.quantity),
+        price: num(i.currentPrice || i.buyPrice),
+        amount: num(i.quantity) * num(i.currentPrice || i.buyPrice) * (isOptType(i.type) ? 100 : 1),
+      })),
+    },
+    receivables: {
+      total:   stats.totalReceivable,
+      formula: 'Σ bajoquinto.salePrice − pagos (solo activos)',
+      items:   receivableItems,
+    },
+    manualAssets: {
+      total:   stats.manualAssets,
+      formula: 'Σ asset.value (isActive)',
+      items:   assets.filter(a => a.isActive !== false).map(a => ({ id: a.id, name: a.name, type: a.type, amount: num(a.value) })),
+    },
+    totalAssets:  stats.totalAssets,
+    assetsFormula: 'efectivo + inversiones + por_cobrar + activos_manuales',
+
+    // ── Pasivos ───────────────────────────────────────────────────────────────
+    cardDebt: {
+      total:   stats.totalCardDebt,
+      formula: 'Σ card.balance',
+      items:   cards.map(c => ({ id: c.id, name: `${c.bankName}${c.cardName ? ' · ' + c.cardName : ''}`, amount: num(c.balance), limit: num(c.limit) })),
+    },
+    manualLiabilities: {
+      total:   stats.manualLiabilities,
+      formula: 'Σ liability.amount (isActive)',
+      items:   liabilities.filter(l => l.isActive !== false).map(l => ({ id: l.id, name: l.name, type: l.type, amount: num(l.amount) })),
+    },
+    totalLiabilities:  stats.totalLiabilities,
+    liabFormula:       'tarjetas + pasivos_manuales',
+
+    // ── Patrimonio ────────────────────────────────────────────────────────────
+    netWorth:       stats.netWorth,
+    netWorthFormula: 'total_activos − total_pasivos',
+
+    // ── Flujo del mes ─────────────────────────────────────────────────────────
+    monthIncome:   stats.monthIncome,
+    monthExpenses: stats.monthExpenses,
+    monthFlow:     stats.monthFlow,
+    flowFormula:   'ingresos − gastos (excluye pago_tarjeta para evitar doble conteo)',
+
+    // ── Metadatos ─────────────────────────────────────────────────────────────
+    rules: [
+      'R1: Transferencias no afectan patrimonio (origen− = destino+)',
+      'R2: pago_tarjeta → reduce efectivo y reduce pasivo',
+      'R3: gasto con tarjeta → aumenta pasivo y aumenta gastos',
+      'R4: gasto desde cuenta → reduce efectivo y aumenta gastos',
+      'R5: ingreso → aumenta efectivo e ingresos',
+      'R6: IBKR NLV es fuente principal si existe; posiciones individuales excluidas',
+      'R7: No se suman posiciones + NLV simultáneamente',
+      'R8: Por cobrar = activo (bajoquintos activos con saldo pendiente)',
+      'R9: Inventario bajoquinto solo es activo si tiene precio definido',
+      'R10: pago_tarjeta excluido de monthExpenses (gasto ya contado al cargar tarjeta)',
+    ],
+    computedAt: new Date().toISOString(),
+  }
 }

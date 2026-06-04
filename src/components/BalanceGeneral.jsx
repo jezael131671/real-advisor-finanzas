@@ -1,6 +1,7 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
+import { ChevronDown } from 'lucide-react'
 import useFinanceStore from '../store/useFinanceStore.js'
-import { computeStats, computeMonthlyFlow } from '../store/selectors.js'
+import { computeStats, computeMonthlyFlow, computeBreakdown } from '../store/selectors.js'
 import { fmx, fmxC } from '../lib/formatters.js'
 
 // ── Mini sparkline ────────────────────────────────────────────────────────────
@@ -99,8 +100,10 @@ function FlowBars({ data }) {
 // ─────────────────────────────────────────────────────────────────────────────
 export default function BalanceGeneral({ setTab }) {
   const state = useFinanceStore()
-  const stats = useMemo(() => computeStats(state), [state])
-  const { accounts, investments, assets, cards, liabilities, transactions } = state
+  const stats = useMemo(() => computeStats(state),     [state])
+  const bd    = useMemo(() => computeBreakdown(state), [state])
+  const { accounts, investments, assets, cards, liabilities, bajoquintos = [], transactions, settings } = state
+  const [showDebug, setShowDebug] = useState(false)
 
   const flowData = useMemo(() => computeMonthlyFlow(transactions), [transactions])
 
@@ -122,11 +125,14 @@ export default function BalanceGeneral({ setTab }) {
   const nwPositive   = netWorth >= 0
   const debtRatio    = totalAssets > 0 ? (totalLibs / totalAssets) * 100 : 0
 
+  const totalReceivable = stats.totalReceivable ?? 0
+
   // Asset composition segments
   const assetSegs = [
-    { pct: totalCash,    color: 'bg-sky-500',     label: 'Cuentas',      value: totalCash    },
-    { pct: invValue,     color: 'bg-violet-500',  label: 'Inversiones',  value: invValue     },
-    { pct: manualAssets, color: 'bg-emerald-500', label: 'Otros activos', value: manualAssets },
+    { pct: totalCash,       color: 'bg-sky-500',     label: 'Cuentas',       value: totalCash       },
+    { pct: invValue,        color: 'bg-violet-500',  label: 'Inversiones',   value: invValue        },
+    { pct: totalReceivable, color: 'bg-amber-500',   label: 'Por cobrar',    value: totalReceivable },
+    { pct: manualAssets,    color: 'bg-emerald-500', label: 'Otros activos', value: manualAssets    },
   ].filter(s => s.pct > 0)
 
   const liabSegs = [
@@ -279,6 +285,8 @@ export default function BalanceGeneral({ setTab }) {
           <p className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: 'var(--t3)' }}>
             ACTIVOS
           </p>
+
+          {/* Efectivo */}
           {accounts.length > 0 && (
             <>
               <Row label="Efectivo y cuentas" value={fmx(totalCash)} bold />
@@ -287,15 +295,31 @@ export default function BalanceGeneral({ setTab }) {
               ))}
             </>
           )}
-          {investments.length > 0 && (
+
+          {/* Inversiones — usa stats.investmentValue que incluye IBKR NLV */}
+          {invValue > 0 && (
             <>
               <Row label="Inversiones" value={fmx(invValue)} bold separator={accounts.length > 0} />
-              {investments.map(i => {
-                const val = Number(i.currentPrice || i.buyPrice || 0) * Number(i.quantity || 1)
-                return <Row key={i.id} label={`  ${i.ticker || i.asset}`} value={fmx(val)} indent color="text-indigo-600" />
-              })}
+              {bd.investments.ibkrNLV != null && (
+                <Row label="  IBKR (NLV)" value={fmx(bd.investments.ibkrNLV)} indent color="text-indigo-600" />
+              )}
+              {bd.investments.positions.map(i => (
+                <Row key={i.id} label={`  ${i.ticker}`} value={fmx(i.amount)} indent color="text-indigo-600" />
+              ))}
             </>
           )}
+
+          {/* Por cobrar (bajoquintos) */}
+          {totalReceivable > 0 && (
+            <>
+              <Row label="Por cobrar (bajoquintos)" value={fmx(totalReceivable)} bold separator />
+              {bd.receivables.items.map(r => (
+                <Row key={r.id} label={`  ${r.name}${r.model ? ' · ' + r.model : ''}`} value={fmx(r.amount)} indent color="text-amber-600" />
+              ))}
+            </>
+          )}
+
+          {/* Activos físicos */}
           {assets.filter(a => a.isActive !== false).length > 0 && (
             <>
               <Row label="Activos físicos" value={fmx(manualAssets)} bold separator />
@@ -304,7 +328,8 @@ export default function BalanceGeneral({ setTab }) {
               ))}
             </>
           )}
-          {(accounts.length === 0 && investments.length === 0 && assets.length === 0) && (
+
+          {(accounts.length === 0 && invValue === 0 && assets.length === 0 && totalReceivable === 0) && (
             <p className="text-sm py-2" style={{ color: 'var(--t3)' }}>Sin activos registrados</p>
           )}
           <Row label="TOTAL ACTIVOS" value={fmx(totalAssets)} color="text-emerald-600" bold separator />
@@ -349,6 +374,143 @@ export default function BalanceGeneral({ setTab }) {
           <p className="text-xs mt-1" style={{ color: 'var(--t3)' }}>
             {fmx(totalAssets)} activos − {fmx(totalLibs)} pasivos
           </p>
+        </div>
+
+        {/* ── Desglose de cálculo (debug / audit) ──────────────── */}
+        <div className="card mb-5">
+          <button
+            onClick={() => setShowDebug(v => !v)}
+            className="btn-press w-full flex items-center justify-between"
+          >
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-left" style={{ color: 'var(--t3)' }}>
+                Desglose de cálculo
+              </p>
+              <p className="text-[10px] text-left mt-0.5" style={{ color: 'var(--t3)' }}>
+                Auditoria financiera — cómo se calcula cada número
+              </p>
+            </div>
+            <ChevronDown size={16} color="var(--t3)"
+              style={{ transform: showDebug ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+          </button>
+
+          {showDebug && (
+            <div className="mt-4 space-y-4 fade-in">
+
+              {/* Fórmula principal */}
+              <div className="rounded-2xl p-3" style={{ background: 'var(--s2)', border: '1px solid var(--border)' }}>
+                <p className="text-[9px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--t3)' }}>Fórmula patrimonio</p>
+                <p className="text-xs font-mono" style={{ color: 'var(--t2)' }}>
+                  {fmxC(stats.totalAssets)} activos<br />
+                  − {fmxC(stats.totalLiabilities)} pasivos<br />
+                  = <span style={{ color: netWorth >= 0 ? '#059669' : '#E11D48', fontWeight: 900 }}>{fmxC(netWorth)}</span>
+                </p>
+              </div>
+
+              {/* Activos desglose */}
+              <div>
+                <p className="text-[9px] font-bold uppercase tracking-wider mb-1.5" style={{ color: 'var(--t3)' }}>Activos ({bd.assetsFormula})</p>
+                <div className="space-y-1">
+                  {[
+                    { label: '💵 Efectivo',      v: bd.cash.total,        f: bd.cash.formula        },
+                    { label: '📈 Inversiones',   v: bd.investments.total, f: bd.investments.formula  },
+                    { label: '🎸 Por cobrar',    v: bd.receivables.total, f: bd.receivables.formula  },
+                    { label: '🏠 Otros activos', v: bd.manualAssets.total,f: bd.manualAssets.formula },
+                  ].map(({ label, v, f }) => v > 0 && (
+                    <div key={label} className="flex justify-between items-start">
+                      <div>
+                        <span className="text-xs font-medium" style={{ color: 'var(--t2)' }}>{label}</span>
+                        <p className="text-[9px]" style={{ color: 'var(--t3)' }}>{f}</p>
+                      </div>
+                      <span className="text-xs font-bold text-emerald-600 shrink-0">{fmxC(v)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Pasivos desglose */}
+              <div>
+                <p className="text-[9px] font-bold uppercase tracking-wider mb-1.5" style={{ color: 'var(--t3)' }}>Pasivos ({bd.liabFormula})</p>
+                <div className="space-y-1">
+                  {[
+                    { label: '💳 Tarjetas', v: bd.cardDebt.total,          f: bd.cardDebt.formula          },
+                    { label: '📦 Deudas',   v: bd.manualLiabilities.total,  f: bd.manualLiabilities.formula },
+                  ].map(({ label, v, f }) => v > 0 && (
+                    <div key={label} className="flex justify-between items-start">
+                      <div>
+                        <span className="text-xs font-medium" style={{ color: 'var(--t2)' }}>{label}</span>
+                        <p className="text-[9px]" style={{ color: 'var(--t3)' }}>{f}</p>
+                      </div>
+                      <span className="text-xs font-bold text-rose-600 shrink-0">−{fmxC(v)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Flujo */}
+              <div>
+                <p className="text-[9px] font-bold uppercase tracking-wider mb-1.5" style={{ color: 'var(--t3)' }}>Flujo del mes</p>
+                <p className="text-[9px] mb-1.5" style={{ color: 'var(--t3)' }}>{bd.flowFormula}</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { label: 'Ingresos',  v: bd.monthIncome,   color: '#059669' },
+                    { label: 'Gastos',    v: bd.monthExpenses, color: '#E11D48' },
+                    { label: 'Flujo net', v: bd.monthFlow,     color: bd.monthFlow >= 0 ? '#059669' : '#E11D48' },
+                  ].map(({ label, v, color }) => (
+                    <div key={label} className="rounded-xl p-2" style={{ background: 'var(--s2)' }}>
+                      <p className="text-[9px] uppercase mb-0.5" style={{ color: 'var(--t3)' }}>{label}</p>
+                      <p className="text-xs font-black" style={{ color }}>{fmxC(v)}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* IBKR */}
+              {bd.investments.ibkrNLV != null && (
+                <div>
+                  <p className="text-[9px] font-bold uppercase tracking-wider mb-1.5" style={{ color: 'var(--t3)' }}>IBKR (R6)</p>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {[
+                      { label: 'NLV',         v: bd.investments.ibkrNLV        },
+                      { label: 'Cash',        v: bd.investments.ibkrCash       },
+                      { label: 'No realizado',v: bd.investments.ibkrUnrealized },
+                      { label: 'P&L hoy',     v: bd.investments.ibkrDailyPnl   },
+                    ].map(({ label, v }) => v != null && (
+                      <div key={label} className="rounded-xl p-2" style={{ background: 'var(--s2)' }}>
+                        <p className="text-[9px] uppercase mb-0.5" style={{ color: 'var(--t3)' }}>{label}</p>
+                        <p className="text-xs font-black"
+                          style={{ color: v >= 0 ? 'var(--t1)' : '#E11D48' }}>
+                          {v >= 0 ? '' : '-'}{fmxC(Math.abs(v))}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                  {bd.investments.ibkrSyncedAt && (
+                    <p className="text-[9px] mt-1.5" style={{ color: 'var(--t3)' }}>
+                      Fuente: {bd.investments.ibkrSource === 'capture' ? 'OCR captura' : 'API'} ·{' '}
+                      {new Date(bd.investments.ibkrSyncedAt).toLocaleString('es-MX', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Reglas */}
+              <div>
+                <p className="text-[9px] font-bold uppercase tracking-wider mb-1.5" style={{ color: 'var(--t3)' }}>
+                  Reglas aplicadas
+                </p>
+                <div className="space-y-0.5">
+                  {bd.rules.map((r, i) => (
+                    <p key={i} className="text-[9px]" style={{ color: 'var(--t3)' }}>{r}</p>
+                  ))}
+                </div>
+              </div>
+
+              <p className="text-[9px]" style={{ color: 'var(--t3)' }}>
+                Calculado: {new Date(bd.computedAt).toLocaleString('es-MX')}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* ── Quick actions ────────────────────────────────────── */}

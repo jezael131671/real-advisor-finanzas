@@ -5,7 +5,7 @@ import {
   Loader2, BrainCircuit,
 } from 'lucide-react'
 import useFinanceStore   from '../store/useFinanceStore.js'
-import { computeStats, computeAlerts, computeMonthlyFlow, getAccountGradient, computeCashFlow, computeAdvisorScore } from '../store/selectors.js'
+import { computeStats, computeAlerts, computeMonthlyFlow, getAccountGradient, computeCashFlow, computeAdvisorScore, computeBreakdown } from '../store/selectors.js'
 import { fmx, fmxC, fmtMonth } from '../lib/formatters.js'
 import { fetchMarketPrices, hasApiKey } from '../services/marketData.js'
 import { getMarketStatus } from '../lib/priceApi.js'
@@ -73,6 +73,22 @@ function FlowChart({ data }) {
     </svg>
   )
 }
+
+// ── Patrimonio breakdown row ──────────────────────────────────────────────────
+const BDRow = ({ emoji, label, value, color, bold = false, separator = false }) => (
+  <>
+    {separator && <div style={{ height: 1, background: 'rgba(255,255,255,0.07)', margin: '6px 0' }} />}
+    <div className="flex items-center justify-between py-0.5">
+      <span className={`text-[11px] ${bold ? 'font-bold' : 'font-medium'}`}
+        style={{ color: bold ? 'rgba(255,255,255,0.80)' : 'rgba(167,139,250,0.60)' }}>
+        {emoji && <span className="mr-1">{emoji}</span>}{label}
+      </span>
+      <span className={`text-[11px] ${bold ? 'font-bold' : 'font-medium'} shrink-0`} style={{ color }}>
+        {value}
+      </span>
+    </div>
+  </>
+)
 
 // ── Progress bar ──────────────────────────────────────────────────────────────
 const Bar = ({ pct, gradient, h = 5 }) => (
@@ -382,6 +398,10 @@ const URGENCY_CFG = {
 export default function Dashboard({ openModal, setTab }) {
   const state = useFinanceStore()
   const { accounts, cards, transactions, investments, metas, subscriptions, bajoquintos, updateInvestment, networthHistory = [] } = state
+
+  // ── Breakdown expand/collapse ─────────────────────────────────────────────
+  const [showBD, setShowBD] = useState(false)
+  const bd = useMemo(() => computeBreakdown(state), [state])
 
   // ── Portfolio price refresh ───────────────────────────────────────────────
   const [isFetchingPrices, setIsFetchingPrices] = useState(false)
@@ -734,9 +754,59 @@ export default function Dashboard({ openModal, setTab }) {
               )}
             </div>
 
+            {/* Breakdown toggle */}
+            <button
+              onClick={() => setShowBD(v => !v)}
+              className="btn-press mt-3 w-full flex items-center justify-between px-3 py-2 rounded-2xl text-[11px] font-semibold"
+              style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(167,139,250,0.70)', border: '1px solid rgba(99,102,241,0.18)' }}>
+              <span>🔍 Desglose patrimonial</span>
+              <ChevronRight size={11}
+                style={{ transform: showBD ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s' }} />
+            </button>
+
+            {/* Breakdown content */}
+            {showBD && (
+              <div className="mt-2 rounded-2xl px-3 py-3 fade-in"
+                style={{ background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.07)' }}>
+                <p className="text-[9px] font-bold uppercase tracking-wider mb-2"
+                  style={{ color: 'rgba(167,139,250,0.45)' }}>Activos</p>
+                {bd.cash.total > 0 && (
+                  <BDRow emoji="💵" label="Efectivo" value={fmxC(bd.cash.total)} color="#4ADE80" />
+                )}
+                {bd.investments.total > 0 && (
+                  <BDRow emoji="📈" label={bd.investments.ibkrNLV ? 'IBKR NLV + otras inv.' : 'Inversiones'}
+                    value={fmxC(bd.investments.total)} color="#818CF8" />
+                )}
+                {bd.receivables.total > 0 && (
+                  <BDRow emoji="🎸" label="Por cobrar" value={fmxC(bd.receivables.total)} color="#F59E0B" />
+                )}
+                {bd.manualAssets.total > 0 && (
+                  <BDRow emoji="🏠" label="Otros activos" value={fmxC(bd.manualAssets.total)} color="#60A5FA" />
+                )}
+                <BDRow label="Total activos" value={fmxC(bd.totalAssets)} color="#4ADE80" bold separator />
+
+                <p className="text-[9px] font-bold uppercase tracking-wider mt-2 mb-1"
+                  style={{ color: 'rgba(167,139,250,0.45)' }}>Pasivos</p>
+                {bd.cardDebt.total > 0 && (
+                  <BDRow emoji="💳" label="Tarjetas" value={`−${fmxC(bd.cardDebt.total)}`} color="#F87171" />
+                )}
+                {bd.manualLiabilities.total > 0 && (
+                  <BDRow emoji="📦" label="Otros pasivos" value={`−${fmxC(bd.manualLiabilities.total)}`} color="#F87171" />
+                )}
+                <BDRow label="Total pasivos" value={`−${fmxC(bd.totalLiabilities)}`} color="#F87171" bold separator />
+
+                <BDRow
+                  label="Patrimonio neto"
+                  value={fmxC(bd.netWorth)}
+                  color={bd.netWorth >= 0 ? '#4ADE80' : '#F87171'}
+                  bold separator
+                />
+              </div>
+            )}
+
             {/* Ver evolución button */}
             <button onClick={() => setTab('evolucion')}
-              className="btn-press mt-3 w-full flex items-center justify-center gap-1 py-2 rounded-2xl text-[11px] font-semibold"
+              className="btn-press mt-2 w-full flex items-center justify-center gap-1 py-2 rounded-2xl text-[11px] font-semibold"
               style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(167,139,250,0.70)', border: '1px solid rgba(99,102,241,0.18)' }}>
               📊 Ver evolución patrimonial <ChevronRight size={11} />
             </button>

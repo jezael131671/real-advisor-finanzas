@@ -6,7 +6,8 @@ import {
 import toast from 'react-hot-toast'
 import useFinanceStore from '../../store/useFinanceStore.js'
 import { preprocessImage, analyzeCapture } from '../../lib/captureParser.js'
-import { fmxD } from '../../lib/formatters.js'
+import { computeStats } from '../../store/selectors.js'
+import { fmxD, uid, today } from '../../lib/formatters.js'
 
 // ── Step IDs ───────────────────────────────────────────────────────────────
 const STEP = { UPLOAD: 0, ANALYZING: 1, REVIEW: 2, DONE: 3 }
@@ -114,6 +115,7 @@ export default function CaptureModal({ onClose }) {
     updateCard, addCard,
     updateAccount, addAccount,
     updateSettings, settings,
+    addNetworthSnapshot,
   } = useFinanceStore()
 
   // ── State ────────────────────────────────────────────────────────────────
@@ -279,6 +281,27 @@ export default function CaptureModal({ onClose }) {
     }
 
     setStep(STEP.DONE)
+
+    // Auto-save networth snapshot after every confirmed capture
+    try {
+      const freshState = useFinanceStore.getState()
+      const s = computeStats(freshState)
+      addNetworthSnapshot({
+        id:        uid(),
+        date:      today(),
+        netWorth:         s.netWorth,
+        totalAssets:      s.totalAssets,
+        totalLiabilities: s.totalLiabilities,
+        totalCash:        s.totalCash,
+        investmentValue:  s.investmentValue,
+        totalCardDebt:    s.totalCardDebt,
+        monthIncome:      s.monthIncome,
+        monthExpenses:    s.monthExpenses,
+        monthFlow:        s.monthFlow,
+        source: 'capture',
+      })
+    } catch {}
+
     setTimeout(onClose, 900)
   }
 
