@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import {
   Plus, Pencil, Trash2, TrendingUp, TrendingDown, BarChart3,
-  ArrowUpRight, ArrowDownRight, RefreshCw, Loader2, X, Zap,
+  ArrowUpRight, ArrowDownRight, RefreshCw, Loader2, X, Zap, Camera,
 } from 'lucide-react'
 import useFinanceStore from '../store/useFinanceStore.js'
 import { BROKERS, TICKER_DB } from '../store/defaultData.js'
@@ -494,12 +494,97 @@ function PositionHistorySheet({ inv, onClose }) {
   )
 }
 
+// ── IBKR capture summary panel ────────────────────────────────────────────────
+function IBKRPanel({ snap, openModal }) {
+  const up   = num(snap.lastUnrealizedPnl) >= 0
+  const upD  = num(snap.lastDailyPnl)      >= 0
+  const fmtSync = snap.syncedAt
+    ? new Date(snap.syncedAt).toLocaleString('es-MX', {
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+      })
+    : null
+
+  return (
+    <div className="mx-4 mb-3 rounded-3xl p-5"
+      style={{
+        background: 'linear-gradient(135deg,#0D0821 0%,#1E1050 55%,#0F1530 100%)',
+        border: '1px solid rgba(99,102,241,0.22)',
+      }}>
+
+      {/* Header row */}
+      <div className="flex items-start justify-between mb-4">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-widest mb-0.5"
+            style={{ color: 'rgba(99,102,241,0.80)' }}>
+            IBKR · Net Liquidation Value
+          </p>
+          <p className="text-3xl font-black text-white leading-none">
+            {fmx(snap.lastNLV)}
+          </p>
+        </div>
+        <button
+          onClick={() => openModal('capture')}
+          className="btn-press flex items-center gap-1.5 px-3 py-2 rounded-xl text-[11px] font-bold shrink-0"
+          style={{
+            background: 'rgba(99,102,241,0.22)',
+            border: '1px solid rgba(99,102,241,0.38)',
+            color: '#A5B4FC',
+          }}>
+          <Camera size={12} /> Actualizar
+        </button>
+      </div>
+
+      {/* 3-column metrics */}
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        <div className="rounded-2xl p-3" style={{ background: 'rgba(255,255,255,0.05)' }}>
+          <p style={{ fontSize: 9, color: 'rgba(255,255,255,0.38)', textTransform: 'uppercase',
+            letterSpacing: '0.06em', marginBottom: 3 }}>
+            Cash
+          </p>
+          <p className="text-xs font-black text-white">{fmx(snap.lastCash)}</p>
+        </div>
+        <div className="rounded-2xl p-3"
+          style={{ background: up ? 'rgba(5,150,105,0.14)' : 'rgba(225,29,72,0.10)' }}>
+          <p style={{ fontSize: 9, color: 'rgba(255,255,255,0.38)', textTransform: 'uppercase',
+            letterSpacing: '0.06em', marginBottom: 3 }}>
+            No realizado
+          </p>
+          <p className={`text-xs font-black ${up ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {up ? '+' : ''}{fmx(snap.lastUnrealizedPnl)}
+          </p>
+        </div>
+        <div className="rounded-2xl p-3"
+          style={{ background: upD ? 'rgba(5,150,105,0.14)' : 'rgba(225,29,72,0.10)' }}>
+          <p style={{ fontSize: 9, color: 'rgba(255,255,255,0.38)', textTransform: 'uppercase',
+            letterSpacing: '0.06em', marginBottom: 3 }}>
+            P&L hoy
+          </p>
+          <p className={`text-xs font-black ${upD ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {upD ? '+' : ''}{fmx(snap.lastDailyPnl)}
+          </p>
+        </div>
+      </div>
+
+      {fmtSync && (
+        <p style={{ fontSize: 9, color: 'rgba(255,255,255,0.28)' }}>
+          Captura: {fmtSync}  ·  {snap.source === 'capture' ? 'OCR' : 'API'}
+        </p>
+      )}
+    </div>
+  )
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 export default function Inversiones({ openModal }) {
-  const { investments, accounts, deleteInvestment, updateInvestment } = useFinanceStore()
+  const { investments, accounts, settings, deleteInvestment, updateInvestment } = useFinanceStore()
 
   // ── IBKR integration ───────────────────────────────────────────────────────
   const ibkr = useIBKR()
+
+  // ── IBKR capture snapshot ──────────────────────────────────────────────────
+  const ibkrSnap       = settings?.ibkr ?? {}
+  const hasIbkrSnap    = num(ibkrSnap.lastNLV) > 0
+  const hasIbkrPositions = investments.some(i => i.ibkrSynced)
 
   const [filter,       setFilter]       = useState('todas')
   const [confirmDel,   setConfirmDel]   = useState(null)
@@ -821,6 +906,11 @@ export default function Inversiones({ openModal }) {
           </div>
         </div>
       </div>
+
+      {/* ── IBKR capture panel (shown when no synced positions exist) ── */}
+      {hasIbkrSnap && !hasIbkrPositions && (
+        <IBKRPanel snap={ibkrSnap} openModal={openModal} />
+      )}
 
       {/* ── Summary strip ──────────────────────────────────────────── */}
       {summary && (

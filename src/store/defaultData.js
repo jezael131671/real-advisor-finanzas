@@ -36,6 +36,7 @@ export const INSTITUTIONS = [
   "BBVA", "Banamex / Citibanamex", "Santander", "Banorte", "HSBC",
   "Scotiabank", "Inbursa", "BanBajio", "Banca Mifel", "Multiva",
   "Nu", "Hey Banco", "Spin by OXXO", "Mercado Pago", "Clip",
+  "Stori", "DiDi", "Revolut", "Fondeadora", "Cuenca",
   "CETES Directo", "GBM+", "Efectivo", "Otro",
 ]
 

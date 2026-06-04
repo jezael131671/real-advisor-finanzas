@@ -65,13 +65,30 @@ export default function Movimientos({ openModal }) {
 
   return (
     <div className="mb-nav">
-      <div className="px-5 pt-14 pt-safe flex justify-between items-center mb-4">
+      <div className="px-5 pt-14 pt-safe flex justify-between items-center mb-3">
         <h1 className="text-2xl font-black" style={{ color: 'var(--t1)' }}>Movimientos</h1>
         <button onClick={() => openModal('transaction', { type: 'gasto' })}
           className="btn-press flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-bold"
           style={{ background: 'var(--accent)', color: '#fff' }}>
           <Plus size={15} strokeWidth={2.5} /> Nuevo
         </button>
+      </div>
+
+      {/* ── Quick-add actions ────────────────────────────────────── */}
+      <div className="px-5 mb-3 flex gap-2">
+        {[
+          { label: '💰 Ingreso',    type: 'ingreso',      bg: 'rgba(5,150,105,0.10)',  border: 'rgba(5,150,105,0.22)',  color: '#059669' },
+          { label: '💸 Gasto',      type: 'gasto',        bg: 'rgba(225,29,72,0.08)',  border: 'rgba(225,29,72,0.20)',  color: '#E11D48' },
+          { label: '💳 Pago',       type: 'pago_tarjeta', bg: 'rgba(79,70,229,0.08)',  border: 'rgba(79,70,229,0.20)',  color: 'var(--accent)' },
+          { label: '↔️ Traspaso',   type: 'transferencia',bg: 'rgba(14,116,144,0.08)', border: 'rgba(14,116,144,0.20)', color: '#0E7490' },
+        ].map(({ label, type, bg, border, color }) => (
+          <button key={type}
+            onClick={() => openModal('transaction', { type })}
+            className="btn-press flex-1 py-2.5 rounded-2xl text-[11px] font-bold text-center"
+            style={{ background: bg, border: `1px solid ${border}`, color }}>
+            {label}
+          </button>
+        ))}
       </div>
 
       {/* Search */}
