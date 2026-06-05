@@ -542,9 +542,9 @@ export async function analyzeCapture(imageBlob, onProgress) {
     .map(l => l.trim())
     .filter(l => l.length > 1)   // drop single-char noise lines
 
-  const institution  = detectInstitution(rawText)
+  const institution    = detectInstitution(rawText)
   const classification = classifyCapture(rawText, lines)
-  const movements    = detectMovements(rawText, lines)
+  const movements      = detectMovements(rawText, lines)
 
   // Extract typed fields for detected institution
   const detected = {}
@@ -553,6 +553,30 @@ export async function analyzeCapture(imageBlob, onProgress) {
       detected[key] = def.isDay
         ? findDayNearKeyword(lines, def.keywords)
         : findAmountNearKeyword(lines, def.keywords)
+    }
+  }
+
+  // ── Product-type-aware extraction (overrides institution keywords) ─────────
+  // BBVA institution uses credit-card keywords ('saldo adeudado', 'tu deuda').
+  // For a debit screenshot, those don't match — we need 'saldo disponible'.
+  const pt = classification.productType
+  if (pt === 'debit_account' || pt === 'savings_account') {
+    const debitKws = [
+      'saldo disponible', 'disponible', 'disponible en cuenta',
+      'saldo en cuenta', 'saldo al día', 'saldo actual',
+    ]
+    const debitBal = findAmountNearKeyword(lines, debitKws)
+    if (debitBal != null) detected.balance = debitBal
+  }
+  if (pt === 'investment_account') {
+    // Ensure NLV is populated even if institution field missed it
+    if (detected.nlv == null) {
+      detected.nlv = findAmountNearKeyword(lines,
+        ['net liquidation value', 'net liq', 'nlv', 'valor neto', 'portfolio value'])
+    }
+    if (detected.cash == null) {
+      detected.cash = findAmountNearKeyword(lines,
+        ['total cash', 'cash balance', 'cash disponible', 'available cash'])
     }
   }
 

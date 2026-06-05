@@ -258,98 +258,47 @@ export default function CaptureModal({ onClose }) {
     return values[def.key] ?? ''
   }
 
-  // ── Confirm & apply to store ──────────────────────────────────────────────
+  // ── Confirm & apply to store ─────────────────────────────────────────────
+  // KEY INVARIANT: The balance from the capture screenshot is the GROUND TRUTH.
+  // Movements registered via addTransaction modify balances via applyTxEffect.
+  // To prevent that from overriding the captured balance, we do TWO passes:
+  //   Pass 1 — register confirmed movements (tracked, possibly changes balance)
+  //   Pass 2 — force the captured balance as the definitive value
+  // ──────────────────────────────────────────────────────────────────────────
   const handleConfirm = () => {
     const cl          = result?.classification ?? {}
     const productName = cl.productName || result?.institution || ''
-    const { addTransaction, transactions } = useFinanceStore.getState()
 
-    if (accountType === 'card') {
-      const payload = {}
-      const b  = num('balance');            if (b  != null) payload.balance           = b
-      const l  = num('limit');              if (l  != null) payload.limit             = l
-      const cd = day('cutDay');             if (cd != null) payload.cutDay            = cd
-      const dd = day('dueDay');             if (dd != null) payload.dueDay            = dd
-      const mp = num('minPayment');         if (mp != null) payload.minPayment        = mp
-      const ni = num('noInterestPayment');  if (ni != null) payload.noInterestPayment = ni
-      // Store last4 for future smart-matching
-      if (cl.last4) payload.last4 = cl.last4
+    // ── Debug snapshot BEFORE ─────────────────────────────────────────────
+    const _before = useFinanceStore.getState()
+    const _sb = computeStats(_before)
+    console.group('[CaptureModal] ▶ Confirmar captura')
+    console.log('accountType :', accountType)
+    console.log('productType :', cl.productType)
+    console.log('targetId    :', targetId)
+    console.log('values      :', values)
+    console.log('num(balance):', num('balance'))
+    console.log('accounts en store:', _before.accounts?.map(a => `${a.id}=${a.balance}`))
+    console.log('totalCash ANTES  :', _sb.totalCash)
+    console.log('netWorth ANTES   :', _sb.netWorth)
 
-      if (targetId === '__new__') {
-        const name = productName || result?.institution || 'Nueva tarjeta'
-        addCard({ bankName: result?.institution || name, cardName: name, ...payload })
-        toast.success(`Tarjeta ${name} creada ✓`)
-      } else {
-        // Show previous vs new balance in toast
-        const prev = cards.find(x => x.id === targetId)?.balance ?? 0
-        updateCard(targetId, payload)
-        const c   = cards.find(x => x.id === targetId)
-        const bal = b ?? 0
-        const diff = bal - prev
-        const name = c?.cardName || c?.bankName || 'Tarjeta'
-        if (prev !== 0 && diff !== 0) {
-          toast.success(`${name}: ${diff >= 0 ? '+' : ''}${fmxD(diff)} vs anterior ${fmxD(prev)}`)
-        } else {
-          toast.success(`${name} actualizada — saldo ${fmxD(bal)} ✓`)
-        }
-      }
-
-    } else if (accountType === 'account') {
-      const b = num('balance')
-      if (b == null) { toast.error('Ingresa el saldo disponible'); return }
-      if (cl.last4) {}  // stored via addAccount/updateAccount below
-
-      if (targetId === '__new__') {
-        const name    = productName || result?.institution || 'Nueva cuenta'
-        const accType = cl.productType === 'savings_account' ? 'ahorro' : 'debito'
-        addAccount({ name, institution: result?.institution || name, type: accType, balance: b, last4: cl.last4 ?? undefined })
-        toast.success(`Cuenta ${name} creada — saldo ${fmxD(b)} ✓`)
-      } else {
-        const prev = accounts.find(x => x.id === targetId)?.balance ?? 0
-        updateAccount(targetId, { balance: b, last4: cl.last4 ?? undefined })
-        const a    = accounts.find(x => x.id === targetId)
-        const diff = b - prev
-        const name = a?.name || 'Cuenta'
-        if (prev !== 0 && diff !== 0) {
-          toast.success(`${name}: ${diff >= 0 ? '+' : ''}${fmxD(diff)} vs anterior ${fmxD(prev)}`)
-        } else {
-          toast.success(`${name} actualizada — saldo ${fmxD(b)} ✓`)
-        }
-      }
-
-    } else {
-      // broker or investment → goes into settings.ibkr
-      const patch = {}
-      const nlv  = num('nlv') ?? num('balance'); if (nlv  != null) patch.lastNLV          = nlv
-      const cash = num('cash');                  if (cash != null) patch.lastCash         = cash
-      const upnl = num('unrealizedPnl');         if (upnl != null) patch.lastUnrealizedPnl = upnl
-      const dpnl = num('dailyPnl');              if (dpnl != null) patch.lastDailyPnl     = dpnl
-      patch.syncedAt = new Date().toISOString()
-      patch.source   = 'capture'
-
-      const prevNLV = settings?.ibkr?.lastNLV ?? 0
-      updateSettings({ ibkr: { ...(settings?.ibkr ?? {}), ...patch } })
-      const diff = (nlv ?? 0) - prevNLV
-      if (prevNLV !== 0 && diff !== 0) {
-        toast.success(`IBKR NLV: ${diff >= 0 ? '+' : ''}${fmxD(diff)} vs anterior ${fmxD(prevNLV)}`)
-      } else {
-        toast.success(`IBKR actualizado — NLV ${fmxD(nlv ?? 0)} ✓`)
-      }
-    }
-
-    // ── Register confirmed movements ────────────────────────────────────
+    // ── PHASE 1: Register confirmed movements ─────────────────────────────
+    // These go through addTransaction → applyTxEffect (may change balance).
+    // Phase 2 will restore the correct captured balance afterwards.
     if (confirmedMovements.length > 0) {
-      const allMovs = result?.movements ?? []
+      const { addTransaction, transactions } = useFinanceStore.getState()
+      const allMovs    = result?.movements ?? []
       const toRegister = allMovs.filter(m => confirmedMovements.includes(m.id))
-      let registered = 0
+      let   registered = 0
       toRegister.forEach(m => {
-        // Duplicate check: same date + amount + description prefix
-        const dup = (transactions || []).some(tx =>
+        const dup = transactions.some(tx =>
           tx.date === m.date &&
           Math.abs(Number(tx.amount) - m.amount) < 0.01 &&
           tx.description?.toLowerCase().startsWith(m.description.slice(0, 8).toLowerCase())
         )
-        if (dup) return
+        if (dup) { console.log('[Movimiento duplicado omitido]', m.description, m.amount); return }
+        // Use accountId/cardId for category tracking, but Phase 2 will
+        // override the balance back to the captured value.
         addTransaction({
           type:        m.type,
           amount:      m.amount,
@@ -359,28 +308,131 @@ export default function CaptureModal({ onClose }) {
           cardId:      accountType === 'card'    && targetId !== '__new__' ? targetId : undefined,
         })
         registered++
+        console.log('[Movimiento registrado]', m.description, m.amount)
       })
-      if (registered > 0) toast(`${registered} movimiento${registered !== 1 ? 's' : ''} registrado${registered !== 1 ? 's' : ''}`, { icon: '📋' })
+      if (registered > 0)
+        toast(`${registered} movimiento${registered !== 1 ? 's' : ''} registrado${registered !== 1 ? 's' : ''}`, { icon: '📋' })
     }
+
+    // ── PHASE 2: Commit captured balance (ground truth, overrides Phase 1) ─
+    // Always use useFinanceStore.getState() here — gets the post-Phase-1 state.
+    const store = useFinanceStore.getState()
+
+    if (accountType === 'card') {
+      const b  = num('balance')
+      const l  = num('limit')
+      const cd = day('cutDay')
+      const dd = day('dueDay')
+      const mp = num('minPayment')
+      const ni = num('noInterestPayment')
+      const payload = { ...(b  != null ? { balance:           b  } : {}),
+                        ...(l  != null ? { limit:             l  } : {}),
+                        ...(cd != null ? { cutDay:            cd } : {}),
+                        ...(dd != null ? { dueDay:            dd } : {}),
+                        ...(mp != null ? { minPayment:        mp } : {}),
+                        ...(ni != null ? { noInterestPayment: ni } : {}),
+                        ...(cl.last4   ? { last4:          cl.last4 } : {}),
+                      }
+      const prev = store.cards?.find(x => x.id === targetId)?.balance ?? 0
+      if (targetId === '__new__') {
+        const name = productName || result?.institution || 'Nueva tarjeta'
+        store.addCard({ bankName: result?.institution || name, cardName: name, ...payload })
+        toast.success(`Tarjeta ${name} creada ✓`)
+      } else {
+        store.updateCard(targetId, payload)
+        const c    = store.cards?.find(x => x.id === targetId)
+        const bal  = b ?? 0
+        const diff = bal - prev
+        const name = c?.cardName || c?.bankName || 'Tarjeta'
+        console.log(`[Card] ${name}: ${prev} → ${bal} (diff ${diff >= 0 ? '+' : ''}${diff})`)
+        if (prev !== 0 && diff !== 0)
+          toast.success(`${name}: ${diff >= 0 ? '+' : ''}${fmxD(diff)} vs anterior ${fmxD(prev)}`)
+        else
+          toast.success(`${name} actualizada — saldo ${fmxD(bal)} ✓`)
+      }
+
+    } else if (accountType === 'account') {
+      const b = num('balance')
+      if (b == null) {
+        console.error('[CaptureModal] num(balance) = null — sin valor capturado')
+        toast.error('Ingresa el saldo disponible')
+        console.groupEnd()
+        return
+      }
+      const accType    = cl.productType === 'savings_account' ? 'ahorro' : 'debito'
+      const extraProps = {
+        ...(cl.last4            ? { last4:              cl.last4            } : {}),
+        ...(cl.linkedAccountLast4 ? { linkedAccountLast4: cl.linkedAccountLast4 } : {}),
+        source:    'capture',
+        updatedAt: new Date().toISOString(),
+      }
+      const prev = store.accounts?.find(x => x.id === targetId)?.balance ?? 0
+      if (targetId === '__new__') {
+        const name = productName || result?.institution || 'Nueva cuenta'
+        store.addAccount({ name, institution: result?.institution || name, type: accType, balance: b, ...extraProps })
+        console.log(`[Account NEW] ${name} balance=${b}`)
+        toast.success(`Cuenta ${name} creada — saldo ${fmxD(b)} ✓`)
+      } else {
+        // Force balance to captured value (ground truth, overrides any Phase 1 changes)
+        store.updateAccount(targetId, { balance: b, ...extraProps })
+        const a    = store.accounts?.find(x => x.id === targetId)
+        const diff = b - prev
+        const name = a?.name || 'Cuenta'
+        console.log(`[Account] ${name} (${targetId}): ${prev} → ${b} (diff ${diff >= 0 ? '+' : ''}${diff})`)
+        if (prev !== 0 && diff !== 0)
+          toast.success(`${name}: ${diff >= 0 ? '+' : ''}${fmxD(diff)} vs anterior ${fmxD(prev)}`)
+        else
+          toast.success(`${name} actualizada — saldo ${fmxD(b)} ✓`)
+      }
+
+    } else {
+      // broker / investment → settings.ibkr
+      const nlv  = num('nlv') ?? num('balance')
+      const cash = num('cash')
+      const upnl = num('unrealizedPnl')
+      const dpnl = num('dailyPnl')
+      const patch = {
+        ...(nlv  != null ? { lastNLV:           nlv  } : {}),
+        ...(cash != null ? { lastCash:          cash } : {}),
+        ...(upnl != null ? { lastUnrealizedPnl: upnl } : {}),
+        ...(dpnl != null ? { lastDailyPnl:      dpnl } : {}),
+        syncedAt: new Date().toISOString(),
+        source:   'capture',
+      }
+      const prevNLV = store.settings?.ibkr?.lastNLV ?? 0
+      store.updateSettings({ ibkr: { ...(store.settings?.ibkr ?? {}), ...patch } })
+      const diff = (nlv ?? 0) - prevNLV
+      console.log(`[IBKR] NLV: ${prevNLV} → ${nlv}`)
+      if (prevNLV !== 0 && diff !== 0)
+        toast.success(`IBKR NLV: ${diff >= 0 ? '+' : ''}${fmxD(diff)} vs anterior ${fmxD(prevNLV)}`)
+      else
+        toast.success(`IBKR actualizado — NLV ${fmxD(nlv ?? 0)} ✓`)
+    }
+
+    // ── Debug snapshot AFTER ──────────────────────────────────────────────
+    const _after = useFinanceStore.getState()
+    const _sa = computeStats(_after)
+    console.log('accounts en store DESPUÉS:', _after.accounts?.map(a => `${a.id}=${a.balance}`))
+    console.log('totalCash DESPUÉS:', _sa.totalCash)
+    console.log('netWorth DESPUÉS :', _sa.netWorth)
+    console.groupEnd()
 
     setStep(STEP.DONE)
 
-    // Auto-save networth snapshot after every confirmed capture
+    // Auto-save networth snapshot
     try {
-      const freshState = useFinanceStore.getState()
-      const s = computeStats(freshState)
       addNetworthSnapshot({
         id:        uid(),
         date:      today(),
-        netWorth:         s.netWorth,
-        totalAssets:      s.totalAssets,
-        totalLiabilities: s.totalLiabilities,
-        totalCash:        s.totalCash,
-        investmentValue:  s.investmentValue,
-        totalCardDebt:    s.totalCardDebt,
-        monthIncome:      s.monthIncome,
-        monthExpenses:    s.monthExpenses,
-        monthFlow:        s.monthFlow,
+        netWorth:         _sa.netWorth,
+        totalAssets:      _sa.totalAssets,
+        totalLiabilities: _sa.totalLiabilities,
+        totalCash:        _sa.totalCash,
+        investmentValue:  _sa.investmentValue,
+        totalCardDebt:    _sa.totalCardDebt,
+        monthIncome:      _sa.monthIncome,
+        monthExpenses:    _sa.monthExpenses,
+        monthFlow:        _sa.monthFlow,
         source: 'capture',
       })
     } catch {}
