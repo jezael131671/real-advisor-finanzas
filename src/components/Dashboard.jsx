@@ -1542,6 +1542,189 @@ export default function Dashboard({ openModal, setTab }) {
         )}
       </div>
 
+      {/* ── Auditoría del store (debug panel) ────────────────────────────────
+          Panel temporal de diagnóstico. Muestra el estado raw del store y los
+          totales calculados para confirmar qué hay guardado vs qué muestra el
+          dashboard. Útil para detectar persistencia y cálculo incorrectos.
+      ── */}
+      <AuditPanel
+        accounts={accounts}
+        cards={cards}
+        investments={investments}
+        transactions={transactions}
+        settings={state.settings}
+        stats={stats}
+        setTab={setTab}
+      />
+
+    </div>
+  )
+}
+
+// ── AuditPanel ───────────────────────────────────────────────────────────────
+function AuditPanel({ accounts, cards, investments, transactions, settings, stats, setTab }) {
+  const [open, setOpen] = useState(false)
+  const fmt = (n) => (Number(n) || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const ibkrNLV = settings?.ibkr?.lastNLV ?? 0
+
+  return (
+    <div className="px-5 pb-8">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="btn-press w-full flex items-center justify-between px-4 py-3 rounded-2xl"
+        style={{ background: 'var(--s1)', border: '1px solid var(--border)' }}
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-sm">🔍</span>
+          <span className="text-xs font-bold" style={{ color: 'var(--t2)' }}>
+            Auditoría del store
+          </span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded-lg font-bold"
+            style={{ background: 'rgba(217,119,6,0.12)', color: '#D97706' }}>
+            DEBUG
+          </span>
+        </div>
+        <span className="text-xs" style={{ color: 'var(--t3)' }}>
+          {accounts.length}C / {cards.length}T / {transactions.length}M
+          {open ? ' ▲' : ' ▼'}
+        </span>
+      </button>
+
+      {open && (
+        <div className="mt-2 rounded-2xl overflow-hidden fade-in"
+          style={{ background: 'var(--s1)', border: '1px solid var(--border)' }}>
+
+          <div className="divide-y" style={{ borderColor: 'var(--border)' }}>
+
+            {/* Cuentas */}
+            <div className="px-4 py-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider mb-2"
+                style={{ color: 'var(--t3)' }}>
+                Cuentas ({accounts.length}) — totalCash: ${fmt(stats.totalCash)}
+              </p>
+              {accounts.length === 0 && (
+                <p className="text-xs text-amber-500">Sin cuentas. Ir a Configuración → Datos de prueba.</p>
+              )}
+              {accounts.map(a => (
+                <div key={a.id} className="flex items-center justify-between py-0.5">
+                  <span className="text-xs" style={{ color: 'var(--t2)' }}>{a.name}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold"
+                      style={{ color: Number(a.balance) > 0 ? '#059669' : 'var(--t3)' }}>
+                      ${fmt(a.balance)}
+                    </span>
+                    {a.source && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded-full"
+                        style={{ background: a.source === 'capture' ? 'rgba(79,70,229,0.15)' : 'var(--s3)',
+                                 color: a.source === 'capture' ? '#818CF8' : 'var(--t3)' }}>
+                        {a.source}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Tarjetas */}
+            <div className="px-4 py-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider mb-2"
+                style={{ color: 'var(--t3)' }}>
+                Tarjetas ({cards.length}) — totalDeuda: ${fmt(stats.totalCardDebt)}
+              </p>
+              {cards.length === 0 && (
+                <p className="text-xs text-amber-500">Sin tarjetas.</p>
+              )}
+              {cards.map(c => (
+                <div key={c.id} className="flex items-center justify-between py-0.5">
+                  <span className="text-xs" style={{ color: 'var(--t2)' }}>
+                    {c.bankName} {c.cardName !== c.bankName ? c.cardName : ''}
+                  </span>
+                  <span className="text-xs font-bold"
+                    style={{ color: Number(c.balance) > 0 ? '#E11D48' : 'var(--t3)' }}>
+                    ${fmt(c.balance)} / ${fmt(c.limit)}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {/* Inversiones */}
+            <div className="px-4 py-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider mb-2"
+                style={{ color: 'var(--t3)' }}>
+                Inversiones ({investments.length})
+                {ibkrNLV > 0 ? ` + IBKR NLV $${fmt(ibkrNLV)}` : ''}
+                {' '}— investValue: ${fmt(stats.investmentValue)}
+              </p>
+              {investments.length === 0 && ibkrNLV === 0 && (
+                <p className="text-xs text-amber-500">Sin inversiones. Captura IBKR para ver NLV.</p>
+              )}
+              {ibkrNLV > 0 && (
+                <div className="flex items-center justify-between py-0.5">
+                  <span className="text-xs" style={{ color: 'var(--t2)' }}>IBKR NLV</span>
+                  <span className="text-xs font-bold" style={{ color: '#818CF8' }}>${fmt(ibkrNLV)}</span>
+                </div>
+              )}
+              {investments.map(i => (
+                <div key={i.id} className="flex items-center justify-between py-0.5">
+                  <span className="text-xs" style={{ color: 'var(--t2)' }}>{i.ticker || i.asset}</span>
+                  <span className="text-xs font-bold" style={{ color: 'var(--t1)' }}>
+                    {i.quantity} × ${i.currentPrice || i.buyPrice}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {/* Totales */}
+            <div className="px-4 py-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider mb-2"
+                style={{ color: 'var(--t3)' }}>
+                Totales calculados
+              </p>
+              {[
+                { label: 'totalCash',        v: stats.totalCash,        c: '#059669' },
+                { label: 'totalCardDebt',    v: stats.totalCardDebt,    c: '#E11D48' },
+                { label: 'investmentValue',  v: stats.investmentValue,  c: '#6366F1' },
+                { label: 'totalReceivable',  v: stats.totalReceivable ?? 0, c: '#F59E0B' },
+                { label: 'totalAssets',      v: stats.totalAssets,      c: '#059669', bold: true },
+                { label: 'totalLiabilities', v: stats.totalLiabilities, c: '#E11D48', bold: true },
+                { label: 'netWorth',         v: stats.netWorth,         c: stats.netWorth >= 0 ? '#4ADE80' : '#F87171', bold: true },
+                { label: 'monthIncome',      v: stats.monthIncome,      c: '#059669' },
+                { label: 'monthExpenses',    v: stats.monthExpenses,    c: '#E11D48' },
+                { label: 'monthFlow',        v: stats.monthFlow,        c: stats.monthFlow >= 0 ? '#059669' : '#E11D48' },
+              ].map(({ label, v, c, bold }) => (
+                <div key={label} className="flex justify-between py-0.5">
+                  <span className={`text-xs ${bold ? 'font-bold' : 'font-medium'}`}
+                    style={{ color: 'var(--t2)' }}>{label}</span>
+                  <span className={`text-xs ${bold ? 'font-bold' : 'font-medium'}`}
+                    style={{ color: c }}>
+                    ${fmt(v)}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {/* Storage info */}
+            <div className="px-4 py-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider mb-1"
+                style={{ color: 'var(--t3)' }}>
+                Persistencia
+              </p>
+              <p className="text-xs" style={{ color: 'var(--t3)' }}>
+                localStorage · clave: <code className="font-mono">real-advisor-v2</code>
+              </p>
+              <p className="text-xs mt-0.5" style={{ color: 'var(--t3)' }}>
+                Movimientos: {transactions.length} · seeded: {String(settings?.seeded ?? false)}
+              </p>
+              <button
+                onClick={() => setTab('config')}
+                className="btn-press mt-2 text-xs font-bold px-3 py-1.5 rounded-xl"
+                style={{ background: 'rgba(225,29,72,0.08)', color: '#E11D48', border: '1px solid rgba(225,29,72,0.15)' }}>
+                Ir a Configuración → Datos de prueba
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

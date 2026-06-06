@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import useFinanceStore from '../store/useFinanceStore.js'
 import { DEFAULT_CATEGORIES, DEFAULT_METAS } from '../store/defaultData.js'
-import { TEST_CASES, CASE_A, CASE_B, CASE_C } from '../store/testData.js'
+import { TEST_CASES, CASE_A, CASE_B, CASE_C, CASE_USER } from '../store/testData.js'
 import { validateBreakdown } from '../store/selectors.js'
 import { useIBKR } from '../hooks/useIBKR.js'
 import toast from 'react-hot-toast'
@@ -364,9 +364,10 @@ export default function Configuracion() {
           {/* Case buttons */}
           <div className="space-y-2">
             {[
-              { id: 'caseA', label: 'Caso A', desc: 'BBVA $3K + Revolut $5K + IBKR $2K − Nu $1K → Patrim. $9K', color: '#059669' },
-              { id: 'caseB', label: 'Caso B', desc: 'Solo IBKR NLV $10K, sin cuentas ni pasivos → Patrim. $10K',  color: '#6366F1' },
-              { id: 'caseC', label: 'Caso C', desc: 'Transferencia BBVA→Revolut: patrimonio sin cambio, flujo $0',  color: '#D97706' },
+              { id: 'caseUser', label: '🏠 Real',  desc: 'BBVA $1,413 · Revolut $25,119 · Stori $50 · Tarjetas $14,698 → Patrim. $11,885', color: '#E11D48' },
+              { id: 'caseA',    label: 'Caso A', desc: 'BBVA $3K + Revolut $5K + IBKR $2K − Nu $1K → Patrim. $9K', color: '#059669' },
+              { id: 'caseB',    label: 'Caso B', desc: 'Solo IBKR NLV $10K, sin cuentas ni pasivos → Patrim. $10K',  color: '#6366F1' },
+              { id: 'caseC',    label: 'Caso C', desc: 'Transferencia BBVA→Revolut: patrimonio sin cambio, flujo $0',  color: '#D97706' },
             ].map(({ id, label, desc, color }) => (
               <button key={id}
                 onClick={() => handleLoadTestCase(id)}

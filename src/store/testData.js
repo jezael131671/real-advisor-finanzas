@@ -173,8 +173,65 @@ export const CASE_C = {
   },
 }
 
+// ── Case USER: Balances reales del usuario ────────────────────────────────────
+// Cuentas: BBVA $1,413.74  ·  Revolut $25,119.87  ·  Stori Cuenta+ $50.39
+// Tarjetas: Stori $2,275  ·  DiDi $3,557.86  ·  Nu $8,865.50
+//
+// Expected:
+//   totalCash        = $26,584.00   (1413.74 + 25119.87 + 50.39)
+//   totalCardDebt    = $14,698.36   (2275 + 3557.86 + 8865.50)
+//   totalAssets      = $26,584.00
+//   totalLiabilities = $14,698.36
+//   netWorth         = $11,885.64
+// ─────────────────────────────────────────────────────────────────────────────
+export const CASE_USER = {
+  accounts: [
+    { id: 'cu-bbva',    name: 'BBVA Débito',   institution: 'BBVA',    type: 'debito',  balance: 1413.74,  colorIndex: 0, createdAt: T0, source: 'manual' },
+    { id: 'cu-revolut', name: 'Revolut',        institution: 'Revolut', type: 'ahorro',  balance: 25119.87, colorIndex: 1, createdAt: T0, source: 'manual' },
+    { id: 'cu-stori-c', name: 'Stori Cuenta+',  institution: 'Stori',   type: 'ahorro',  balance: 50.39,    colorIndex: 2, createdAt: T0, source: 'manual' },
+  ],
+  cards: [
+    {
+      id: 'cu-stori', bankName: 'Stori', cardName: 'Stori Card',
+      balance: 2275, limit: 10000, cutDay: 5, dueDay: 20,
+      minPayment: 300, noInterestPayment: 2275,
+      colorIndex: 0, createdAt: T0, source: 'manual',
+    },
+    {
+      id: 'cu-didi', bankName: 'DiDi', cardName: 'DiDi Card',
+      balance: 3557.86, limit: 15000, cutDay: 8, dueDay: 23,
+      minPayment: 500, noInterestPayment: 3557.86,
+      colorIndex: 1, createdAt: T0, source: 'manual',
+    },
+    {
+      id: 'cu-nu', bankName: 'Nu', cardName: 'Nu',
+      balance: 8865.50, limit: 20000, cutDay: 12, dueDay: 27,
+      minPayment: 1000, noInterestPayment: 8865.50,
+      colorIndex: 2, createdAt: T0, source: 'manual',
+    },
+  ],
+  transactions: [],
+  investments: [], assets: [], liabilities: [], bajoquintos: [],
+  subscriptions: [], metas: DEFAULT_METAS, categories: DEFAULT_CATEGORIES,
+  cashflowItems: [], networthHistory: [],
+  settings: {
+    currency: 'MXN',
+    seeded: true,
+    ibkr: { lastNLV: 0, lastCash: 0, lastUnrealizedPnl: 0, lastDailyPnl: 0, syncedAt: null, source: null },
+  },
+  _expected: {
+    totalCash:        26584.00,   // 1413.74 + 25119.87 + 50.39
+    totalCardDebt:    14698.36,   // 2275 + 3557.86 + 8865.50
+    totalReceivable:  0,
+    totalAssets:      26584.00,
+    totalLiabilities: 14698.36,
+    netWorth:         11885.64,   // 26584.00 − 14698.36
+  },
+}
+
 export const TEST_CASES = {
-  caseA: CASE_A,
-  caseB: CASE_B,
-  caseC: CASE_C,
+  caseA:    CASE_A,
+  caseB:    CASE_B,
+  caseC:    CASE_C,
+  caseUser: CASE_USER,
 }
